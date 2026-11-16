@@ -26,10 +26,18 @@ idf_component_register(SRCS "main.c" REQUIRES rmt_uart)
 **方式二：组件管理器**（已带 `idf_component.yml`）
 
 ```yaml
+# main/idf_component.yml
 dependencies:
   rmt_uart:
-    path: ../components/rmt_uart     # 或 registry 地址
+    git: https://github.com/xingxing2013/esp32s3_RMT_UART.git
+    path: components/rmt_uart
+    version: main
 ```
+
+仓库地址：<https://github.com/xingxing2013/esp32s3_RMT_UART>
+
+> 补丁驱动 `esp_driver_rmt` 需要另外作为同名组件提供（工程 `components/` 或 `managed_components/`），
+> 组件管理器不会自动把它装进来。
 
 完整示例见 `components/rmt_uart/examples/`（basic_echo / three_ports / frame_formats），
 组件级详细说明见 `components/rmt_uart/README.md`。

@@ -1,4 +1,7 @@
 version: "1.0.0"
 description: "ESP32-S3 RMT software UART: up to 3 ports, 5-8 data bits, parity, stop bits, sync and async APIs"
+repository: https://github.com/xingxing2013/esp32s3_RMT_UART
+documentation: https://github.com/xingxing2013/esp32s3_RMT_UART/blob/main/components/rmt_uart/README.md
+issues: https://github.com/xingxing2013/esp32s3_RMT_UART/issues
 dependencies:
   idf: ">=5.3"

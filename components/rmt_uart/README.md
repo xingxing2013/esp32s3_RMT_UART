@@ -51,7 +51,9 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 # main/idf_component.yml
 dependencies:
   rmt_uart:
-    path: ../components/rmt_uart
+    git: https://github.com/xingxing2013/esp32s3_RMT_UART.git
+    path: components/rmt_uart
+    version: main
 ```
 
 > 组件管理器一个包只能提供一个组件。补丁驱动 `esp_driver_rmt` 必须另外作为
