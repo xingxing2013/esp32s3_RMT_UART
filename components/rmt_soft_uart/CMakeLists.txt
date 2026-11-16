@@ -1,4 +1,4 @@
-set(srcs "src/soft_uart_codec.c" "src/symbol_ring.c" "src/soft_uart_core.c")
+set(srcs "src/soft_uart_codec.c" "src/symbol_ring.c" "src/soft_uart_tx.c" "src/soft_uart_core.c")
 
 if(CONFIG_RMT_SOFT_UART_RUN_TESTS)
     list(APPEND srcs "test/su_test_codec.c" "test/su_test_ring.c")
