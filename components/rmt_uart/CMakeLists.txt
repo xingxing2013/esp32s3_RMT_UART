@@ -7,6 +7,6 @@ endif()
 idf_component_register(
     SRCS ${srcs}
     INCLUDE_DIRS "include" "src" "test"
-    REQUIRES esp_driver_rmt esp_driver_gpio
+    REQUIRES esp_driver_rmt esp_driver_gpio esp_timer
     PRIV_REQUIRES unity
 )

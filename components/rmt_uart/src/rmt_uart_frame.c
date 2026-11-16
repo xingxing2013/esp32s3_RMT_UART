@@ -141,6 +141,7 @@ size_t ru_encode(const uint8_t *data, size_t len, const ru_timing_t *t,
     }
 
     size_t wi = 0;
+    bool pending = false;
     for (size_t i = 0; i < len; i++) {
         uint32_t level[12];
         uint32_t duration[12];
@@ -173,18 +174,24 @@ size_t ru_encode(const uint8_t *data, size_t len, const ru_timing_t *t,
         duration[segs] = (t->bit_ticks * t->stop_bits_x2) / 2u;
         segs++;
 
-        for (size_t s = 0; s < segs; s += 2) {
-            out[wi].level0 = level[s];
-            out[wi].duration0 = duration[s];
-            if (s + 1 < segs) {
-                out[wi].level1 = level[s + 1];
-                out[wi].duration1 = duration[s + 1];
+        for (size_t s = 0; s < segs; s++) {
+            if (!pending) {
+                out[wi].level0 = level[s];
+                out[wi].duration0 = duration[s];
+                pending = true;
             } else {
-                out[wi].level1 = 1;
-                out[wi].duration1 = 0;
+                out[wi].level1 = level[s];
+                out[wi].duration1 = duration[s];
+                pending = false;
+                wi++;
             }
-            wi++;
         }
+    }
+    if (pending) {
+        /* 只允许在整段末尾出现 duration=0：RMT 硬件会把 0 时长当作 EOF */
+        out[wi].level1 = 1;
+        out[wi].duration1 = 0;
+        wi++;
     }
     return wi;
 }

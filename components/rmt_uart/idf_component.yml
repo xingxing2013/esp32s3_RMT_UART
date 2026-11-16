@@ -1,0 +1,4 @@
+version: "1.0.0"
+description: "ESP32-S3 RMT software UART: up to 3 ports, 5-8 data bits, parity, stop bits, sync and async APIs"
+dependencies:
+  idf: ">=5.3"

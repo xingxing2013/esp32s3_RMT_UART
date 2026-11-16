@@ -1,140 +1,184 @@
-# ESP32-S3 RMT 三路软件串口
+# ESP32-S3 RMT UART
 
-用 RMT 外设实现 3 路独立全双工 8N1 软件串口，ESP-IDF v5.3+。
+用 RMT 外设实现的软件串口组件，最多 3 路，可被任意 ESP-IDF 工程引用。
 
-## 资源占用
+## 特性
 
-- 3 × RMT TX + 3 × RMT RX（S3 共 4+4，剩 2 个）
-- 每路 1 个发送任务 + 1 个接收任务（共 6 个）
-- 每路：RX symbol 环 4 KB、RX 字节缓冲 1–4 KB、TX 缓冲 0.5–2 KB
-- RMT 中断优先级固定为 3（三路并发高波特率时需要）
+- 最多 **3 路**独立全双工串口，用几路初始化几路
+- 帧格式可配：数据位 **5–8**、校验 **无/偶/奇**、停止位 **1/1.5/2**
+- 波特率 **300–1 000 000** 运行时可配
+- **同步**（`write`/`read`）与**异步**（`write_async`/`read_async`）读写
+- 流式接收回调 `on_rx_data` 与错误回调 `on_error`
+- 两级初始化：全局容量管理 + 每路实例
+- 完整的校验错/停止位错/break/溢出统计
 
-## 接线
+## 引用方式
 
-| 通道 | TX | RX |
-|---|---|---|
-| ch0 | GPIO42 | GPIO41 |
-| ch1 | GPIO40 | GPIO39 |
-| ch2 | GPIO38 | GPIO37 |
+**方式一：拷贝组件**
 
-引脚可在 `idf.py menuconfig -> Component config -> RMT UART` 修改。
-**TX 与 RX 必须是不同引脚**：IDF 的 `gpio_config()` 会把同引脚的输出信号改回普通 GPIO，
-RMT 无法在同一引脚上做内部回环，所以自测必须外部短接。
+把 `components/rmt_uart` 放进你的工程 `components/` 目录，然后在 `main/CMakeLists.txt`：
 
-> GPIO37 在 8 线（Octal）PSRAM 模组（N8R8/N16R8）上被 PSRAM 占用，不能这样接；
-> 4 线 PSRAM 模组（N8R2 等）可以。
+```cmake
+idf_component_register(SRCS "main.c" REQUIRES rmt_uart)
+```
+
+**方式二：组件管理器**（已带 `idf_component.yml`）
+
+```yaml
+dependencies:
+  rmt_uart:
+    path: ../components/rmt_uart     # 或 registry 地址
+```
+
+完整示例见 `examples/rmt_uart_basic/`。
+
+## 快速开始
+
+```c
+#include "rmt_uart.h"
+
+void app_main(void)
+{
+    /* 1. 全局初始化（进程内一次），默认最多 3 路 */
+    ESP_ERROR_CHECK(rmt_uart_global_init(&(rmt_uart_global_config_t){.max_ports = 3}));
+
+    /* 2. 每路一个句柄，用几路初始化几路 */
+    rmt_uart_config_t cfg = {
+        .tx_gpio = 42,
+        .rx_gpio = 41,
+        .baud = 115200,
+        .data_bits = 8,
+        .parity = RMT_UART_PARITY_NONE,
+        .stop_bits = RMT_UART_STOP_BITS_1,
+    };
+    rmt_uart_handle_t uart0 = NULL;
+    ESP_ERROR_CHECK(rmt_uart_init(&cfg, &uart0));
+
+    rmt_uart_write(uart0, "hello", 5, pdMS_TO_TICKS(100));
+
+    uint8_t buf[32];
+    int n = rmt_uart_read(uart0, buf, sizeof(buf), pdMS_TO_TICKS(100)); /* 0 = 超时 */
+
+    rmt_uart_deinit(uart0);
+    rmt_uart_global_deinit();
+}
+```
+
+> **关于「保留 3 路」**：RMT 通道分辨率必须随波特率确定（300 baud 需要 313 kHz，1 M 需要 80 MHz），
+> 所以全局初始化不预创建通道。`max_ports` 是容量约束：第 4 次 `rmt_uart_init` 返回
+> `ESP_ERR_NOT_FOUND`；如果 RMT 已被别的驱动占满，同样返回该错误。
 
 ## API
 
+### 帧格式
+
 ```c
-rmt_uart_config_t cfg = {
-    .tx_gpio = 42,
-    .rx_gpio = 41,
-    .baud = 115200,
-};
-rmt_uart_handle_t u;
-ESP_ERROR_CHECK(rmt_uart_new(&cfg, &u));
+typedef enum {
+    RMT_UART_PARITY_NONE = 0, RMT_UART_PARITY_EVEN, RMT_UART_PARITY_ODD,
+} rmt_uart_parity_t;
 
-rmt_uart_write(u, "hello", 5, pdMS_TO_TICKS(100));   // 返回实际写入字节数
-uint8_t buf[16];
-int n = rmt_uart_read(u, buf, sizeof(buf), pdMS_TO_TICKS(100)); // 0 = 超时
-
-rmt_uart_set_baud(u, 9600);   // 会重建通道并丢弃在途数据
-rmt_uart_del(u);
+typedef enum {
+    RMT_UART_STOP_BITS_1 = 0, RMT_UART_STOP_BITS_1_5, RMT_UART_STOP_BITS_2,
+} rmt_uart_stop_bits_t;
 ```
 
-## 构建
+`data_bits` 取 5–8；校验错与停止位错都会计数并回调，但**字节仍然交付**（与真实 UART 一致）。
 
-```bash
-. $IDF_PATH/export.sh     # Windows: . $IDF_PATH\export.ps1
-idf.py set-target esp32s3
-idf.py build
-idf.py -p COMx flash monitor
+### 同步
+
+```c
+int  rmt_uart_write(h, const void *data, size_t len, TickType_t timeout); /* 实际写入字节数 */
+int  rmt_uart_read (h, void *buf, size_t len, TickType_t timeout);        /* 0 = 超时，-1 = 错误 */
+esp_err_t rmt_uart_flush_rx(h);
+esp_err_t rmt_uart_flush_tx(h);
+bool      rmt_uart_tx_idle(h);
 ```
+
+### 异步
+
+```c
+typedef void (*rmt_uart_done_cb_t)(rmt_uart_handle_t h,
+                                   rmt_uart_async_result_t result,
+                                   size_t transferred, void *ctx);
+
+rmt_uart_write_async(h, data, len, cb, ctx);   /* len ≤ TX 缓冲剩余空间 */
+rmt_uart_read_async (h, buf, len, timeout_ms, cb, ctx);
+```
+
+- 每个实例同一时刻只允许 1 个未完成异步读 + 1 个未完成异步写
+- `write_async` 在返回前把数据拷入内部缓冲
+- `read_async` 读满或超时完成，`transferred` 是实际字节数
+- 回调在驱动任务上下文执行（不是 ISR）
+
+### 流式回调
+
+```c
+typedef struct {
+    void (*on_rx_data)(h, const uint8_t *data, size_t len, void *ctx);
+    void (*on_error)(h, uint32_t errors, void *ctx);   /* RMT_UART_ERROR_* 位或 */
+} rmt_uart_callbacks_t;
+
+rmt_uart_register_callbacks(h, &cbs, ctx);
+```
+
+注册 `on_rx_data` 后数据由回调消费，同步 `read` 不再返回数据，也不能再挂异步读。
+
+### 统计
+
+```c
+rmt_uart_stats_t st;
+rmt_uart_get_stats(h, &st);
+/* tx_bytes / rx_bytes / parity_errors / framing_errors / break_errors
+   rx_overflow / rx_restarts / tx_errors / rx_rearm_errors */
+```
+
+## 帧结构
+
+```
+空闲高 | 起始0 | D0 D1 ... D(N-1) | [校验] | 停止1 | [停止2/1.5]
+```
+
+- 数据 LSB first
+- 偶校验 = 数据位中 1 的个数 mod 2；奇校验取反
+- 停止位只校验第一个停止位的中点，1.5/2 位只影响帧长
 
 ## 自测
 
-- `CONFIG_rmt_uart_RUN_TESTS`：上电跑 codec / ring 的 Unity 用例（20 个，无需接线）
-- `CONFIG_rmt_uart_SELFTEST`：跑 5 项回环自测（都需要 3 组 TX→RX 短接线）
-  - 3 项 `wire-*`：单路 1 KB 随机数据往返
-  - 1 项 `concurrent`：3 路同时收发 1 KB
-  - 1 项 `baud-switch`：9600 ↔ 115200 连续 5 轮切换后仍能收发
-
-预期输出（接好线）：
-
-```
-I (xxx) ru_selftest: selftest summary: 5/5 passed
-```
-
-拔掉任意一路短接线后对应用例必须变成 FAIL —— 这是验证自测本身有效的反向检查。
-
-## 诊断与压测（可选）
-
 `idf.py menuconfig -> Component config -> RMT UART`：
 
-- `Run 3-channel load test at boot`：3 路持续灌数据 + 独立收，统计真实丢字节与 CPU 占用
-  - `Load test baud rate`：默认 1 000 000
-  - `Extra GPTimer interrupt rate (kHz)`：叠加高频硬件中断（0 = 关闭）
-  - `Extra CPU hog duty cycle (%)`：叠加忙等任务（0 = 关闭）
-- `Only start the extra interrupt, skip load test`：只开干扰中断，配合回环自测观察影响
+- `Run on-target unit tests at boot`：19 个 Unity 用例（36 组帧格式组合、校验错、停止位错、时钟偏差、长空闲、break、毛刺等）
+- `Run 3-channel loopback selftest at boot`：14 项板端回环
 
-CPU 统计依赖 `CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS`（打开压测时自动选中）。
+### 实测结果（ESP32-S3 rev v0.2，IDF v5.3.2，GPIO42/41、40/39、38/37 短接）
 
-### 压测结果（2026-11-16，ESP32-S3 rev v0.2，160 MHz）
-
-**1 Mbaud，3 路并发，1 KB 突发（回环自测）**
-
-| 场景 | 结果 |
+| 项目 | 结果 |
 |---|---|
-| 无额外中断 | **5/5 PASS**，每路 1024/1024 |
-| 叠加 20 kHz GPTimer 中断 | **4/5**，ch1 收到 988、ch2 收到 992 字节（fe=0/1） |
+| 板上 Unity | **19/19 通过** |
+| 板端自测矩阵 | **14/14 通过** |
+| 8N1 / 8E1 / 8O1 / 8N2 / 7E1 / 5N1.5 / 6O2 | 全部 256 字节 `match=1, fe=0, pe=0` |
+| 3 路并发 8N1 @115200 | PASS |
+| 异步写 + 异步读 | PASS |
+| `on_rx_data` 流式回调 | PASS |
+| 端口上限（第 4 路） | 正确返回 `ESP_ERR_INVALID_STATE` |
+| 9600 ↔ 115200 切换 | PASS |
+| 1 Mbaud 短突发 1 KB | PASS |
 
-**460800，3 路持续收发 10 s（每轮约 0.9 MB）**
+## 限制
 
-| 场景 | 丢字节 | 帧错误 | CPU 占用 | 吞吐 |
-|---|---|---|---|---|
-| 无额外负载 | 116（0.012%） | 133 | 85.0% | 94 KB/s |
-| +20 kHz 中断 | 296（0.032%） | 180 | 86.1% | 89 KB/s |
-| +20 kHz 中断 + 50% 忙等 | 368（0.039%） | 178 | 89.7% | 89 KB/s |
+- 1 Mbaud **持续流**会触发 IDF 5.3.2 RMT 驱动断言
+  `rmt_isr_handle_rx_done rmt_rx.c:584 (offset >= rx_chan->mem_off)`；
+  短突发正常，持续高吞吐建议 ≤460800
+- 3 路 460800 持续满载时双核平均 CPU 约 85–90%
+- 低波特率（≤ ~62.7 k）毛刺过滤被硬件上限削弱到约 3.19 µs
+- 无 DMA、无硬件流控、无 9 位数据
+- 解码器需要线路先出现空闲高电平才能同步；布防时线路已拉低会先报一次 break
 
-**1 Mbaud 持续收发**：约数毫秒后触发 IDF 5.3.2 RMT 驱动断言
-`assert failed: rmt_isr_handle_rx_done rmt_rx.c:584 (offset >= rx_chan->mem_off)`，
-设备重启。这是驱动在「partial RX + 乒乓回绕 + 空闲结束事务」下的已知缺陷，
-**当前版本不能用于 1 M 持续流**；短突发（KB 级）正常。
+## 目录
 
-### 结论
-
-- 3 路并发 1 M **短突发**可用；**持续高吞吐建议 ≤460800**
-- 单帧解码的 CPU 成本明显：1 M 时每个 `ru_rx` 任务约占 18% CPU，`ru_tx` 约 5%
-- 额外中断会让丢字节上升 2–3 倍（仍在 0.04% 量级），但对 1 M 并发突发更敏感（约 3%）
-- 3 路 460800 持续满载时 CPU 已到 85–90%，系统接近饱和
-
-## 限制与已知行为
-
-- 固定 8N1，无校验位 / 流控 / 数据位可配
-- RX 的 `signal_range_min_ns / max_ns` 会按硬件寄存器上限收敛：
-  - 低波特率（≤ ~62.7 k）毛刺过滤窗口被限到约 3.19 µs，只能滤掉很窄的尖峰
-  - 高波特率空闲窗口被限到 `32767 tick`：115200 下约 3.7 ms、1 M 下约 0.41 ms，
-    因此 `rx_restarts` 会持续增长，属正常现象
-- 接收延迟上限 = 96 symbol 的线上时间 + 空闲窗口（115200 下约 4.5 ms）
-- TX 初始化时会先发 10 bit 空闲高电平，把线路拉到 UART 空闲态；
-  否则 RMT 通道未发送时输出低，接收端会先看到一个长低电平
-- 解码器需要「空闲高 → 起始位」的边沿关系才能同步；布防时线路已被拉低会先报一次 break
-- 接收中出现窄毛刺时，毛刺会被当作起始位，最多损失紧随其后的 1 个字节；
-  这个假字节可能不产生 `framing_errors` 计数
-- `set_baud()` 会重建通道并丢弃在途数据；不要与其他线程的读写并发调用
-
-## 实测结果
-
-测试条件：ESP32-S3（chip rev v0.2），IDF v5.3.2，3 组 TX→RX 短接线，1 KB 随机数据。
-
-| 日期 | 波特率 | 单路 ×3 | 3 路并发 | 切换测试 | 结果 |
-|---|---|---|---|---|---|
-| 2026-11-16 | 9600 | PASS | PASS | PASS | 5/5 |
-| 2026-11-16 | 115200 | PASS | PASS | PASS | 5/5 |
-| 2026-11-16 | 460800 | PASS | PASS | PASS | 5/5 |
-| 2026-11-16 | 1000000 | PASS | PASS | PASS | 5/5 |
-
-- 每次均 `fe=0`、`ovf=0`、`match=1`
-- 板上 Unity 用例：17 个 codec + 3 个 ring = **20/20 通过**
-- 1 M 下 3 路并发 `restarts=16`（空闲窗口只有 0.41 ms，事务会频繁重装载），仍无丢字节
+```
+components/rmt_uart/
+  include/rmt_uart.h     公共 API
+  src/                   帧编解码、ring、TX/RX、核心
+  test/                  板端 Unity
+  examples/rmt_uart_basic 最小示例
+```

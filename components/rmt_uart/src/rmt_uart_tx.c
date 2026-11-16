@@ -36,9 +36,11 @@ static void ru_tx_task(void *arg)
             continue;
         }
 
+        u->tx_busy = true;
         esp_err_t err = rmt_transmit(u->tx_ch, u->encoder, u->tx_syms,
                                      words * sizeof(rmt_symbol_word_t), &tcfg);
         if (err != ESP_OK) {
+            u->tx_busy = false;
             u->stats.tx_errors++;
             ESP_LOGW(TAG, "rmt_transmit failed: %s", esp_err_to_name(err));
             continue;
@@ -53,6 +55,7 @@ static void ru_tx_task(void *arg)
         }
 
         err = rmt_tx_wait_all_done(u->tx_ch, wait_ms);
+        u->tx_busy = false;
         if (err != ESP_OK) {
             u->stats.tx_errors++;
             ESP_LOGW(TAG, "tx wait failed: %s", esp_err_to_name(err));
@@ -61,6 +64,7 @@ static void ru_tx_task(void *arg)
             continue;
         }
         u->stats.tx_bytes += (uint32_t)got;
+        ru_async_write_account(u, got);
     }
 
     xSemaphoreGive(u->tx_exited);

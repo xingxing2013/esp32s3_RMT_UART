@@ -6,6 +6,7 @@
 
 #include "driver/rmt_rx.h"
 #include "driver/rmt_tx.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/stream_buffer.h"
@@ -24,6 +25,30 @@
 #define RU_TX_PRIO          10
 #define RU_DEFAULT_RX_BYTES 1024
 #define RU_DEFAULT_TX_BYTES 512
+
+typedef struct {
+    rmt_uart_done_cb_t cb;
+    void *ctx;
+    size_t len;
+    size_t sent;
+    volatile bool active;
+} ru_async_write_t;
+
+typedef struct {
+    rmt_uart_done_cb_t cb;
+    void *ctx;
+    uint8_t *buf;
+    size_t len;
+    size_t got;
+    int64_t deadline_us;
+    esp_timer_handle_t timer;
+    volatile bool active;
+} ru_async_read_t;
+
+void ru_async_write_account(struct rmt_uart_s *u, size_t n);
+void ru_async_read_service(struct rmt_uart_s *u);
+void ru_async_cancel_all(struct rmt_uart_s *u, rmt_uart_async_result_t result);
+void ru_notify_error(struct rmt_uart_s *u, uint32_t errors);
 
 struct rmt_uart_s {
     rmt_uart_config_t cfg;
@@ -55,7 +80,18 @@ struct rmt_uart_s {
     volatile bool closing;
     volatile bool rx_need_rearm;
     volatile bool rx_stopped;
+    volatile bool tx_busy;
+    volatile uint32_t err_accum;
+
+    ru_async_write_t aw;
+    ru_async_read_t ar;
+    rmt_uart_callbacks_t cbs;
+    void *cb_ctx;
+    esp_timer_handle_t rx_timeout_timer;
 
     bool valid;
+
+    int8_t port_index;
+
     rmt_uart_stats_t stats;
 };

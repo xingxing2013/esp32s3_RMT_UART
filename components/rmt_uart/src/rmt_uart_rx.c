@@ -15,18 +15,22 @@ static void ru_decoder_sink(void *ctx, uint8_t byte, ru_rx_flags_t flags)
     struct rmt_uart_s *u = ctx;
     if (flags.break_error) {
         u->stats.break_errors++;
+        u->err_accum |= RMT_UART_ERROR_BREAK;
         return;
     }
     if (flags.framing_error) {
         u->stats.framing_errors++;
+        u->err_accum |= RMT_UART_ERROR_FRAMING;
     }
     if (flags.parity_error) {
         u->stats.parity_errors++;
+        u->err_accum |= RMT_UART_ERROR_PARITY;
     }
     if (xStreamBufferSend(u->rx_sb, &byte, 1, 0) == 1) {
         u->stats.rx_bytes++;
     } else {
         __atomic_fetch_add(&u->stats.rx_overflow, 1, __ATOMIC_RELAXED);
+        u->err_accum |= RMT_UART_ERROR_OVERRUN;
     }
 }
 
@@ -102,6 +106,22 @@ static void ru_rx_task(void *arg)
         size_t n;
         while (!u->closing && (n = ru_ring_pop(u->ring, batch, 32)) > 0) {
             ru_decoder_feed(u->dec, batch, n);
+        }
+
+        if (u->cbs.on_rx_data) {
+            uint8_t chunk[64];
+            size_t got;
+            while ((got = xStreamBufferReceive(u->rx_sb, chunk, sizeof(chunk), 0)) > 0) {
+                u->cbs.on_rx_data((rmt_uart_handle_t)u, chunk, got, u->cb_ctx);
+            }
+        } else if (u->ar.active) {
+            ru_async_read_service(u);
+        }
+
+        uint32_t errs = u->err_accum;
+        if (errs) {
+            u->err_accum = 0;
+            ru_notify_error(u, errs);
         }
     }
 

@@ -58,6 +58,8 @@ static void stats_task(void *arg)
 
 void app_main(void)
 {
+    ESP_ERROR_CHECK(rmt_uart_global_init(NULL));
+
 #if CONFIG_SU_DIAG_ENABLE
 #if CONFIG_SU_DIAG_IRQ_ONLY
     ru_diag_irq_start(CONFIG_SU_DIAG_IRQ_KHZ);
