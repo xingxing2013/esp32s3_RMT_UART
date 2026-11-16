@@ -1,3 +1,5 @@
+![build](https://github.com/xingxing2013/esp32s3_RMT_UART/actions/workflows/build.yml/badge.svg)
+
 # ESP32-S3 RMT UART
 
 用 RMT 外设实现的软件串口组件，最多 3 路，可被任意 ESP-IDF 工程引用。

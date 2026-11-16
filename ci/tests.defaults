@@ -1,0 +1,3 @@
+# CI 专用：把板端 Unity 用例编进固件，验证测试代码本身可编译。
+# 用法：idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;ci/tests.defaults" build
+CONFIG_RMT_UART_RUN_TESTS=y

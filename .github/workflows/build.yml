@@ -1,0 +1,45 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: build ${{ matrix.project }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project:
+          - .
+          - components/rmt_uart/examples/basic_echo
+          - components/rmt_uart/examples/three_ports
+          - components/rmt_uart/examples/frame_formats
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build with ESP-IDF v5.3.2
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.2
+          target: esp32s3
+          path: ${{ matrix.project }}
+
+  unit-tests-compile:
+    name: build with on-target unit tests enabled
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (CONFIG_RMT_UART_RUN_TESTS=y)
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.2
+          target: esp32s3
+          path: .
+          command: idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;ci/tests.defaults" build
