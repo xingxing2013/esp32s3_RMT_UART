@@ -265,4 +265,5 @@ components/rmt_uart/
     three_ports/         三路不同格式，同步/异步/回调
     frame_formats/       5-8 数据位、校验、停止位配置
 components/esp_driver_rmt/  补丁版 IDF 驱动（持续流必需）
+docs/DEBUG_PITFALLS.md     调试踩坑记录（新功能开发前先读）
 ```

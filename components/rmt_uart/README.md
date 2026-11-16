@@ -258,6 +258,7 @@ RX: RMT -> IRAM 回调 -> symbol 环 -> RX 任务 -> 解码 -> StreamBuffer / on
 - 新增帧格式：只改 `rmt_uart_frame.c` 的时序/编码/解码，`test_frame.c` 的组合测试会自动覆盖
 - 调优先级/缓冲：`Kconfig`
 - 验证解码性能：`idf.py -T` 跑 Unity，看 `bench:` 日志的 cycles/byte
+- **动手前先读 [`docs/DEBUG_PITFALLS.md`](../../docs/DEBUG_PITFALLS.md)**：RMT 寄存器上限、`duration=0` EOF、末帧收尾、驱动回绕断言等坑都记录在里面
 
 ## 已知限制
 
