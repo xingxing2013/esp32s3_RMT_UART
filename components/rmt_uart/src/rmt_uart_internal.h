@@ -94,5 +94,8 @@ struct rmt_uart_s {
 
     int8_t port_index;
 
+    uint8_t rx_batch[64];
+    size_t rx_batch_n;
+
     rmt_uart_stats_t stats;
 };

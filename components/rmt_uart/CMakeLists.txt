@@ -8,5 +8,8 @@ idf_component_register(
     SRCS ${srcs}
     INCLUDE_DIRS "include" "src" "test"
     REQUIRES esp_driver_rmt esp_driver_gpio esp_timer
-    PRIV_REQUIRES unity
+    PRIV_REQUIRES unity esp_hw_support
 )
+
+# 解码热路径固定用 -O2，避免宿主工程用 -Og 时性能腰斩
+target_compile_options(${COMPONENT_LIB} PRIVATE -O2)

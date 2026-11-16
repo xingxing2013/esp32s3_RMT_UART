@@ -10,6 +10,21 @@
 
 static const char *TAG = "ru_rx";
 
+static void ru_flush_rx_batch(struct rmt_uart_s *u)
+{
+    if (u->rx_batch_n == 0) {
+        return;
+    }
+    size_t n = u->rx_batch_n;
+    u->rx_batch_n = 0;
+    size_t sent = xStreamBufferSend(u->rx_sb, u->rx_batch, n, 0);
+    u->stats.rx_bytes += (uint32_t)sent;
+    if (sent < n) {
+        __atomic_fetch_add(&u->stats.rx_overflow, 1, __ATOMIC_RELAXED);
+        u->err_accum |= RMT_UART_ERROR_OVERRUN;
+    }
+}
+
 static void ru_decoder_sink(void *ctx, uint8_t byte, ru_rx_flags_t flags)
 {
     struct rmt_uart_s *u = ctx;
@@ -26,11 +41,12 @@ static void ru_decoder_sink(void *ctx, uint8_t byte, ru_rx_flags_t flags)
         u->stats.parity_errors++;
         u->err_accum |= RMT_UART_ERROR_PARITY;
     }
-    if (xStreamBufferSend(u->rx_sb, &byte, 1, 0) == 1) {
-        u->stats.rx_bytes++;
+    if (u->rx_batch_n < sizeof(u->rx_batch)) {
+        u->rx_batch[u->rx_batch_n++] = byte;
     } else {
-        __atomic_fetch_add(&u->stats.rx_overflow, 1, __ATOMIC_RELAXED);
-        u->err_accum |= RMT_UART_ERROR_OVERRUN;
+        ru_flush_rx_batch(u);
+        u->rx_batch[0] = byte;
+        u->rx_batch_n = 1;
     }
 }
 
@@ -108,6 +124,7 @@ static void ru_rx_task(void *arg)
         while (!u->closing && (n = ru_ring_pop(u->ring, batch, 32)) > 0) {
             ru_decoder_feed(u->dec, batch, n);
         }
+        ru_flush_rx_batch(u);
 
         if (u->cbs.on_rx_data) {
             uint8_t chunk[64];

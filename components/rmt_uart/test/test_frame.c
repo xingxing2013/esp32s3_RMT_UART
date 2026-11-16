@@ -2,6 +2,8 @@
 
 #include <string.h>
 
+#include "esp_cpu.h"
+#include "esp_log.h"
 #include "rmt_uart_frame.h"
 #include "unity.h"
 
@@ -569,6 +571,112 @@ static void test_decode_flush_idle_completes_last_byte(void)
     ru_decoder_destroy(d);
 }
 
+static void bench_sink(void *ctx, uint8_t byte, ru_rx_flags_t flags)
+{
+    (void)byte;
+    (void)flags;
+    (*(uint32_t *)ctx)++;
+}
+
+static size_t merge_and_pack(const rmt_symbol_word_t *in, size_t words, rmt_symbol_word_t *out,
+                             size_t out_words)
+{
+    size_t wi = 0;
+    bool have = false;
+    int last_level = -1;
+    uint32_t last_dur = 0;
+
+    for (size_t i = 0; i < words; i++) {
+        for (int half = 0; half < 2; half++) {
+            int level = half ? in[i].level1 : in[i].level0;
+            uint32_t dur = half ? in[i].duration1 : in[i].duration0;
+            if (!dur) {
+                continue;
+            }
+            if (level == last_level) {
+                last_dur += dur;
+                continue;
+            }
+            if (last_level >= 0) {
+                if (!have) {
+                    if (wi >= out_words) {
+                        return wi;
+                    }
+                    out[wi].level0 = last_level;
+                    out[wi].duration0 = last_dur;
+                    have = true;
+                } else {
+                    out[wi].level1 = last_level;
+                    out[wi].duration1 = last_dur;
+                    have = false;
+                    wi++;
+                }
+            }
+            last_level = level;
+            last_dur = dur;
+        }
+    }
+    if (last_level >= 0) {
+        if (!have) {
+            if (wi < out_words) {
+                out[wi].level0 = last_level;
+                out[wi].duration0 = last_dur;
+                out[wi].level1 = 1;
+                out[wi].duration1 = 0;
+                wi++;
+            }
+        } else {
+            out[wi].level1 = (uint16_t)last_level;
+            out[wi].duration1 = last_dur;
+            wi++;
+        }
+    }
+    return wi;
+}
+
+static void test_decode_cycles_per_byte(void)
+{
+    uint32_t res = 0;
+    ru_timing_t t = {0};
+    TEST_ASSERT_EQUAL(ESP_OK, ru_timing_init(115200, 8, RMT_UART_PARITY_NONE,
+                                             RMT_UART_STOP_BITS_1, &res, &t));
+
+    static uint8_t src[1024];
+    static rmt_symbol_word_t syms[1 + 1024 * RU_WORDS_PER_BYTE];
+    const int rounds = 32;
+
+    for (int pattern = 0; pattern < 2; pattern++) {
+        for (size_t i = 0; i < sizeof(src); i++) {
+            src[i] = pattern ? 0xFF : (uint8_t)(i * 7u + 3u);
+        }
+        size_t w = prepend_idle(syms, 10 * t.bit_ticks);
+        w += ru_encode(src, sizeof(src), &t, &syms[w], 1024 * RU_WORDS_PER_BYTE);
+
+        static rmt_symbol_word_t merged_syms[1 + 1024 * RU_WORDS_PER_BYTE];
+        size_t mw = merge_and_pack(syms, w, merged_syms, 1 + 1024 * RU_WORDS_PER_BYTE);
+
+        for (int pass = 0; pass < 2; pass++) {
+            uint32_t count = 0;
+            ru_decoder_t *d = ru_decoder_create(&t, bench_sink, &count);
+            TEST_ASSERT_NOT_NULL(d);
+            const rmt_symbol_word_t *feed = pass ? merged_syms : syms;
+            size_t feed_words = pass ? mw : w;
+            uint32_t c0 = esp_cpu_get_cycle_count();
+            for (int r = 0; r < rounds; r++) {
+                ru_decoder_reset(d);
+                ru_decoder_feed(d, feed, feed_words);
+            }
+            uint32_t c1 = esp_cpu_get_cycle_count();
+            TEST_ASSERT_EQUAL_UINT32((uint32_t)rounds * sizeof(src), count);
+            ESP_LOGI("bench", "decode %s/%s: %.1f cycles/byte (symbols=%u)",
+                     pattern ? "0xFF" : "random", pass ? "merged" : "raw",
+                     (double)(c1 - c0) / ((double)rounds * (double)sizeof(src)),
+                     (unsigned)feed_words);
+            ru_decoder_destroy(d);
+        }
+    }
+}
+
 int ru_test_frame_run(void)
 {
     UNITY_BEGIN();
@@ -588,5 +696,6 @@ int ru_test_frame_run(void)
     RUN_TEST(test_decode_skips_leading_low_run);
     RUN_TEST(test_decode_cold_start_first_symbol_is_start_bit);
     RUN_TEST(test_decode_flush_idle_completes_last_byte);
+    RUN_TEST(test_decode_cycles_per_byte);
     return UNITY_END();
 }

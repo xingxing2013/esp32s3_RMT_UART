@@ -201,7 +201,7 @@ struct ru_decoder_s {
     ru_byte_cb_t cb;
     void *ctx;
 
-    uint64_t now;
+    uint32_t now;
     bool prev_valid;
     int prev_level;
 
@@ -209,7 +209,8 @@ struct ru_decoder_s {
     uint32_t run_ticks;
 
     bool in_frame;
-    uint64_t frame_start;
+    uint32_t frame_start;
+    uint32_t next_sample_ts;
     int next_sample;
     uint8_t data;
     uint32_t ones;
@@ -221,10 +222,19 @@ struct ru_decoder_s {
     bool pending_parity;
 
     bool have_next;
-    uint64_t next_start;
+    uint32_t next_start;
 };
 
-static void dec_emit(ru_decoder_t *d, uint8_t byte, bool framing, bool parity, bool brk)
+/* 32 位 tick 的回绕安全比较：a 在 b 之前 */
+#define RU_INLINE static inline __attribute__((always_inline))
+
+RU_INLINE bool ts_before(uint32_t a, uint32_t b)
+{
+    return (int32_t)(a - b) < 0;
+}
+
+RU_INLINE void dec_emit(ru_decoder_t *d, uint8_t byte, bool framing, bool parity,
+                            bool brk)
 {
     ru_rx_flags_t flags = {
         .framing_error = framing,
@@ -236,7 +246,7 @@ static void dec_emit(ru_decoder_t *d, uint8_t byte, bool framing, bool parity, b
     }
 }
 
-static void dec_run_end(ru_decoder_t *d)
+RU_INLINE void dec_run_end(ru_decoder_t *d)
 {
     if (d->run_level != 0) {
         return;
@@ -252,11 +262,12 @@ static void dec_run_end(ru_decoder_t *d)
     }
 }
 
-static void dec_frame_begin(ru_decoder_t *d, uint64_t t0)
+RU_INLINE void dec_frame_begin(ru_decoder_t *d, uint32_t t0)
 {
     d->in_frame = true;
     d->frame_start = t0;
     d->next_sample = 0;
+    d->next_sample_ts = t0 + d->t.sample_off[0];
     d->data = 0;
     d->ones = 0;
     d->parity_level = false;
@@ -264,16 +275,10 @@ static void dec_frame_begin(ru_decoder_t *d, uint64_t t0)
     d->have_next = false;
 }
 
-static void dec_frame_consume(ru_decoder_t *d, int level, uint64_t start, uint64_t end)
+RU_INLINE void dec_frame_consume(ru_decoder_t *d, int level, uint32_t end)
 {
-    (void)start;
-
     while (d->in_frame) {
-        while (d->next_sample < d->t.sample_count) {
-            uint64_t ts = d->frame_start + d->t.sample_off[d->next_sample];
-            if (ts >= end) {
-                return;
-            }
+        while (d->next_sample < d->t.sample_count && ts_before(d->next_sample_ts, end)) {
             if (d->next_sample < d->t.data_bits) {
                 if (level) {
                     d->data |= (uint8_t)(1u << d->next_sample);
@@ -285,6 +290,12 @@ static void dec_frame_consume(ru_decoder_t *d, int level, uint64_t start, uint64
                 d->stop_level = level != 0;
             }
             d->next_sample++;
+            if (d->next_sample < d->t.sample_count) {
+                d->next_sample_ts = d->frame_start + d->t.sample_off[d->next_sample];
+            }
+        }
+        if (d->next_sample < d->t.sample_count) {
+            return;
         }
 
         bool parity_ok = true;
@@ -308,7 +319,7 @@ static void dec_frame_consume(ru_decoder_t *d, int level, uint64_t start, uint64
             d->pending_parity = !parity_ok;
         }
 
-        if (d->next_start < end) {
+        if (ts_before(d->next_start, end)) {
             if (level == 0) {
                 d->have_next = false;
                 dec_frame_begin(d, d->next_start);
@@ -321,13 +332,10 @@ static void dec_frame_consume(ru_decoder_t *d, int level, uint64_t start, uint64
     }
 }
 
-static void dec_edge(ru_decoder_t *d, int level, uint32_t duration)
+RU_INLINE void dec_edge(ru_decoder_t *d, int level, uint32_t duration)
 {
-    if (duration == 0) {
-        return;
-    }
-    uint64_t start = d->now;
-    uint64_t end = start + duration;
+    uint32_t start = d->now;
+    uint32_t end = start + duration;
 
     if (d->run_level != level) {
         dec_run_end(d);
@@ -337,9 +345,9 @@ static void dec_edge(ru_decoder_t *d, int level, uint32_t duration)
         d->run_ticks += duration;
     }
 
-    if (!d->in_frame && d->have_next && d->next_start <= start) {
+    if (!d->in_frame && d->have_next && (int32_t)(d->next_start - start) <= 0) {
         if (level == 0 && d->next_start == start) {
-            uint64_t t0 = d->next_start;
+            uint32_t t0 = d->next_start;
             d->have_next = false;
             dec_frame_begin(d, t0);
         } else {
@@ -348,15 +356,14 @@ static void dec_edge(ru_decoder_t *d, int level, uint32_t duration)
     }
 
     if (d->in_frame) {
-        dec_frame_consume(d, level, start, end);
+        dec_frame_consume(d, level, end);
     }
 
-    bool first_low_is_start = !d->prev_valid && level == 0 &&
-                              duration < d->t.frame_ticks;
     if (!d->in_frame && level == 0 &&
-        ((d->prev_valid && d->prev_level == 1) || first_low_is_start)) {
+        ((d->prev_valid && d->prev_level == 1) ||
+         (!d->prev_valid && duration < d->t.frame_ticks))) {
         dec_frame_begin(d, start);
-        dec_frame_consume(d, level, start, end);
+        dec_frame_consume(d, level, end);
     }
 
     d->prev_valid = true;
@@ -401,8 +408,12 @@ void ru_decoder_feed(ru_decoder_t *d, const rmt_symbol_word_t *syms, size_t n)
         return;
     }
     for (size_t i = 0; i < n; i++) {
-        dec_edge(d, syms[i].level0, syms[i].duration0);
-        dec_edge(d, syms[i].level1, syms[i].duration1);
+        if (syms[i].duration0) {
+            dec_edge(d, syms[i].level0, syms[i].duration0);
+        }
+        if (syms[i].duration1) {
+            dec_edge(d, syms[i].level1, syms[i].duration1);
+        }
     }
 }
 
