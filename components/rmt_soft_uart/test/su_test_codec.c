@@ -300,7 +300,7 @@ static void test_decode_recovers_after_glitch(void)
     su_timing_t t = {0};
     TEST_ASSERT_EQUAL(ESP_OK, su_timing_init(115200, &res, &t));
 
-    rmt_symbol_word_t glitch[2];
+    rmt_symbol_word_t glitch[2] = {0};
     glitch[0].level0 = 0;
     glitch[0].duration0 = t.bit_ticks + t.bit_ticks / 2;
     glitch[0].level1 = 1;
@@ -328,6 +328,113 @@ static void test_decode_recovers_after_glitch(void)
     su_decoder_destroy(d);
 }
 
+static void test_rx_window_limits(void)
+{
+    const uint32_t bauds[] = {300, 9600, 115200, 460800, 1000000};
+    for (size_t i = 0; i < sizeof(bauds) / sizeof(bauds[0]); i++) {
+        uint32_t res = 0;
+        su_timing_t t = {0};
+        TEST_ASSERT_EQUAL(ESP_OK, su_timing_init(bauds[i], &res, &t));
+
+        uint32_t min_ns = 0, max_ns = 0;
+        TEST_ASSERT_EQUAL(ESP_OK, su_rx_window_ns(bauds[i], res, 80000000u,
+                                                  &min_ns, &max_ns));
+
+        uint64_t filter_ticks = (uint64_t)80000000u * min_ns / 1000000000ull;
+        uint64_t idle_ticks = (uint64_t)res * max_ns / 1000000000ull;
+        TEST_ASSERT_TRUE(filter_ticks <= 255);
+        TEST_ASSERT_TRUE(idle_ticks <= 32767);
+        TEST_ASSERT_TRUE(min_ns >= 1);
+        TEST_ASSERT_TRUE(max_ns > min_ns);
+        /* 空闲窗口必须长于一帧，否则接收事务会在帧中途被截断 */
+        TEST_ASSERT_TRUE((uint64_t)max_ns > 11ull * (1000000000ull / bauds[i]));
+    }
+}
+
+static void test_break_boundary(void)
+{
+    uint32_t res = 0;
+    su_timing_t t = {0};
+    TEST_ASSERT_EQUAL(ESP_OK, su_timing_init(115200, &res, &t));
+
+    /* 10 bit 低电平（起始 + 8 个 0 + 停止位为低）→ 帧错误，字节仍投递 */
+    rmt_symbol_word_t syms[5] = {0};
+    const uint8_t src = 0x00;
+    TEST_ASSERT_EQUAL_size_t(5, su_encode(&src, 1, &t, syms, 5));
+    syms[4].level1 = 0;
+
+    rmt_symbol_word_t stream[8];
+    size_t words = prepend_idle(stream, 10 * t.bit_ticks);
+    memcpy(&stream[words], syms, sizeof(syms));
+    words += 5;
+    words = append_idle(stream, words, 4 * t.bit_ticks);
+
+    rx_sink_t sink = {0};
+    su_decoder_t *d = su_decoder_create(&t, sink_cb, &sink);
+    TEST_ASSERT_NOT_NULL(d);
+    su_decoder_feed(d, stream, words);
+    TEST_ASSERT_EQUAL_UINT32(0, sink.br);
+    TEST_ASSERT_EQUAL_UINT32(1, sink.fe);
+    TEST_ASSERT_EQUAL_UINT32(1, sink.n);
+    TEST_ASSERT_EQUAL_UINT8(0x00, sink.buf[0]);
+    su_decoder_destroy(d);
+
+    /* 11 bit 低电平 → break，不投递字节 */
+    rmt_symbol_word_t syms2[5] = {0};
+    TEST_ASSERT_EQUAL_size_t(5, su_encode(&src, 1, &t, syms2, 5));
+    syms2[4].level1 = 0;
+    syms2[4].duration1 = (uint16_t)(t.bit_ticks + t.bit_ticks);
+
+    rmt_symbol_word_t stream2[10];
+    size_t words2 = prepend_idle(stream2, 10 * t.bit_ticks);
+    memcpy(&stream2[words2], syms2, sizeof(syms2));
+    words2 += 5;
+    words2 = append_idle(stream2, words2, 2 * t.bit_ticks); /* break 需要上升沿才会判定 */
+
+    rx_sink_t sink2 = {0};
+    su_decoder_t *d2 = su_decoder_create(&t, sink_cb, &sink2);
+    TEST_ASSERT_NOT_NULL(d2);
+    su_decoder_feed(d2, stream2, words2);
+    TEST_ASSERT_EQUAL_UINT32(0, sink2.n);
+    TEST_ASSERT_EQUAL_UINT32(1, sink2.br);
+    su_decoder_destroy(d2);
+}
+
+static void test_decode_recovers_after_symbol_loss(void)
+{
+    uint32_t res = 0;
+    su_timing_t t = {0};
+    TEST_ASSERT_EQUAL(ESP_OK, su_timing_init(115200, &res, &t));
+
+    const uint8_t src[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
+    rmt_symbol_word_t syms[1 + 6 * 5];
+    size_t words = prepend_idle(syms, 10 * t.bit_ticks);
+    words += su_encode(src, 6, &t, &syms[words], 6 * 5);
+    TEST_ASSERT_EQUAL_size_t(1 + 30, words);
+
+    /* 丢掉第 3 个字节的全部 symbol，模拟 ring / 字节缓冲溢出 */
+    rmt_symbol_word_t stream[1 + 6 * 5];
+    size_t out = 0;
+    memcpy(&stream[out], &syms[0], sizeof(rmt_symbol_word_t));
+    out += 1;
+    memcpy(&stream[out], &syms[1], 2 * 5 * sizeof(rmt_symbol_word_t));
+    out += 2 * 5;
+    memcpy(&stream[out], &syms[1 + 3 * 5], 3 * 5 * sizeof(rmt_symbol_word_t));
+    out += 3 * 5;
+
+    rx_sink_t sink = {0};
+    su_decoder_t *d = su_decoder_create(&t, sink_cb, &sink);
+    TEST_ASSERT_NOT_NULL(d);
+    su_decoder_feed(d, stream, out);
+
+    /* 丢数据后允许出现少量垃圾，但必须重新同步并正确解出后 3 个字节 */
+    TEST_ASSERT_TRUE(sink.n >= 3);
+    TEST_ASSERT_EQUAL_UINT8(0x44, sink.buf[sink.n - 3]);
+    TEST_ASSERT_EQUAL_UINT8(0x55, sink.buf[sink.n - 2]);
+    TEST_ASSERT_EQUAL_UINT8(0x66, sink.buf[sink.n - 1]);
+    su_decoder_destroy(d);
+}
+
 int su_test_codec_run(void)
 {
     UNITY_BEGIN();
@@ -342,5 +449,8 @@ int su_test_codec_run(void)
     RUN_TEST(test_decode_break_is_not_a_byte);
     RUN_TEST(test_decode_0x00_is_not_break);
     RUN_TEST(test_decode_recovers_after_glitch);
+    RUN_TEST(test_rx_window_limits);
+    RUN_TEST(test_break_boundary);
+    RUN_TEST(test_decode_recovers_after_symbol_loss);
     return UNITY_END();
 }

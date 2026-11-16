@@ -46,10 +46,47 @@ esp_err_t su_timing_init(uint32_t baud, uint32_t *out_resolution_hz,
     return ESP_OK;
 }
 
+esp_err_t su_rx_window_ns(uint32_t baud, uint32_t channel_resolution_hz,
+                          uint32_t filter_clock_hz,
+                          uint32_t *out_min_ns, uint32_t *out_max_ns)
+{
+    if (!out_min_ns || !out_max_ns || baud < 300 || baud > 1000000 ||
+        channel_resolution_hz == 0 || filter_clock_hz == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint64_t bit_ns = 1000000000ull / baud;
+    uint64_t min_ns = bit_ns / 5u;
+    uint64_t max_ns = bit_ns * 40u;
+    if (max_ns < 8000000ull) {
+        max_ns = 8000000ull;
+    }
+
+    /* 硬件寄存器上限：filter ≤ 255 tick，idle ≤ 32767 tick（向下取整保证不越界） */
+    uint64_t filter_limit_ns = (255ull * 1000000000ull) / filter_clock_hz;
+    uint64_t idle_limit_ns = (32767ull * 1000000000ull) / channel_resolution_hz;
+
+    if (min_ns > filter_limit_ns) {
+        min_ns = filter_limit_ns;
+    }
+    if (max_ns > idle_limit_ns) {
+        max_ns = idle_limit_ns;
+    }
+    if (min_ns == 0) {
+        min_ns = 1;
+    }
+    if (max_ns <= min_ns) {
+        max_ns = min_ns + 1;
+    }
+
+    *out_min_ns = (uint32_t)min_ns;
+    *out_max_ns = (uint32_t)max_ns;
+    return ESP_OK;
+}
+
 size_t su_encode(const uint8_t *data, size_t len, const su_timing_t *t,
                  rmt_symbol_word_t *out, size_t out_words)
-{
-    if (!data || !t || !out || t->bit_ticks == 0) {
+{    if (!data || !t || !out || t->bit_ticks == 0) {
         return 0;
     }
     size_t capacity_bytes = out_words / 5u;
@@ -117,7 +154,7 @@ static void dec_run_end(su_decoder_t *d)
     if (d->run_level != 0) {
         return;
     }
-    if (d->run_ticks >= d->t.frame_ticks) {
+    if (d->run_ticks > d->t.frame_ticks) {
         d->pending_valid = false;
         d->in_frame = false;
         d->have_next = false;

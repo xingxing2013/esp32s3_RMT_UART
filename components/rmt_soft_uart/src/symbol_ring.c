@@ -3,6 +3,11 @@
 #include <string.h>
 
 #include "esp_heap_caps.h"
+#include "sdkconfig.h"
+
+#if CONFIG_RMT_ISR_IRAM_SAFE
+#error "rmt_soft_uart 依赖 flash 中的 memcpy，必须关闭 CONFIG_RMT_ISR_IRAM_SAFE"
+#endif
 
 static inline uint32_t ring_load(const volatile uint32_t *p)
 {

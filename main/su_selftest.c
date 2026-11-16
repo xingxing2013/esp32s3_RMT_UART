@@ -192,6 +192,58 @@ cleanup:
     return ok;
 }
 
+/* set_baud 在收发进行中调用：允许丢弃在途数据，但改完必须还能收发 */
+static bool run_baud_switch(uint32_t baud_a, uint32_t baud_b)
+{
+    rmt_soft_uart_config_t cfg = {
+        .tx_gpio = CONFIG_RMT_SOFT_UART_CH0_TX_GPIO,
+        .rx_gpio = CONFIG_RMT_SOFT_UART_CH0_TX_GPIO,
+        .baud = baud_a,
+        .internal_loopback = true,
+        .rx_buffer_bytes = 2048,
+        .tx_buffer_bytes = 1024,
+    };
+
+    rmt_soft_uart_handle_t u = NULL;
+    esp_err_t err = rmt_soft_uart_new(&cfg, &u);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "baud-switch: new failed: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    bool ok = true;
+    for (int round = 0; round < 5 && ok; round++) {
+        const uint32_t seq[3] = {baud_b, baud_a, baud_b};
+        for (size_t i = 0; i < 3 && ok; i++) {
+            if (rmt_soft_uart_set_baud(u, seq[i]) != ESP_OK) {
+                ESP_LOGE(TAG, "baud-switch: set_baud(%u) failed", (unsigned)seq[i]);
+                ok = false;
+                break;
+            }
+            const uint8_t probe[2] = {'O', 'K'};
+            uint8_t rx[2] = {0};
+            int sent = rmt_soft_uart_write(u, probe, 2, pdMS_TO_TICKS(200));
+            int got = rmt_soft_uart_read(u, rx, 2, pdMS_TO_TICKS(1000));
+            bool match = (sent == 2) && (got == 2) && (memcmp(probe, rx, 2) == 0);
+            if (!match) {
+                ESP_LOGE(TAG, "baud-switch round=%d baud=%u: sent=%d got=%d match=%d",
+                         round, (unsigned)seq[i], sent, got, match);
+                ok = false;
+            }
+        }
+    }
+
+    rmt_soft_uart_stats_t st = {0};
+    rmt_soft_uart_get_stats(u, &st);
+    ESP_LOGI(TAG, "baud-switch @%u<->%u %s: fe=%u ovf=%u restarts=%u",
+             (unsigned)baud_a, (unsigned)baud_b, ok ? "PASS" : "FAIL",
+             (unsigned)st.framing_errors, (unsigned)st.rx_overflow,
+             (unsigned)st.rx_restarts);
+
+    rmt_soft_uart_del(u);
+    return ok;
+}
+
 void su_selftest_run(void)
 {
     const ch_desc_t internal[SELFTEST_CHANNELS] = {
@@ -223,6 +275,10 @@ void su_selftest_run(void)
     }
     total++;
     if (run_concurrent(internal, CONFIG_RMT_SOFT_UART_DEMO_BAUD, SELFTEST_LEN)) {
+        pass++;
+    }
+    total++;
+    if (run_baud_switch(CONFIG_RMT_SOFT_UART_DEMO_BAUD, 9600)) {
         pass++;
     }
 

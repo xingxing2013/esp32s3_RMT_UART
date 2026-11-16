@@ -23,7 +23,7 @@ static void su_decoder_sink(void *ctx, uint8_t byte, su_rx_flags_t flags)
     if (xStreamBufferSend(u->rx_sb, &byte, 1, 0) == 1) {
         u->stats.rx_bytes++;
     } else {
-        u->stats.rx_overflow++;
+        __atomic_fetch_add(&u->stats.rx_overflow, 1, __ATOMIC_RELAXED);
     }
 }
 
@@ -42,7 +42,7 @@ static bool IRAM_ATTR su_rx_done_cb(rmt_channel_handle_t channel,
     size_t pushed = su_symbol_ring_push_from_isr(u->ring, edata->received_symbols,
                                                  edata->num_symbols);
     if (pushed < edata->num_symbols) {
-        u->stats.rx_overflow++;
+        __atomic_fetch_add(&u->stats.rx_overflow, 1, __ATOMIC_RELAXED);
     }
     if (edata->flags.is_last) {
         u->rx_need_rearm = true;
@@ -153,7 +153,8 @@ void su_rx_destroy(struct rmt_soft_uart_s *u)
     if (u->rx_ch) {
         rmt_disable(u->rx_ch);
         /* 关闭中断后等待可能仍在另一核执行的回调退出（回调只有 µs 级） */
-        vTaskDelay(2 / portTICK_PERIOD_MS);
+        TickType_t dwell = pdMS_TO_TICKS(2);
+        vTaskDelay(dwell ? dwell : 1);
         rmt_del_channel(u->rx_ch);
         u->rx_ch = NULL;
     }

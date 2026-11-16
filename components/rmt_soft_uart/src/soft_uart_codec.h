@@ -31,6 +31,17 @@ typedef struct su_decoder_s su_decoder_t;
 esp_err_t su_timing_init(uint32_t baud, uint32_t *out_resolution_hz,
                          su_timing_t *out_timing);
 
+/**
+ * 计算 RMT RX 的 signal_range_min_ns / signal_range_max_ns。
+ * 结果已按硬件寄存器上限收敛：
+ *   - filter 时钟 ≤ 255 tick（filter_clock_hz 为 RMT group 时钟，默认 APB 80 MHz）
+ *   - idle 计数 ≤ 32767 tick（按 channel_resolution_hz 换算）
+ * 低波特率下毛刺过滤能力会被削弱，高波特率下空闲窗口会缩短，均属预期。
+ */
+esp_err_t su_rx_window_ns(uint32_t baud, uint32_t channel_resolution_hz,
+                          uint32_t filter_clock_hz,
+                          uint32_t *out_min_ns, uint32_t *out_max_ns);
+
 size_t su_encode(const uint8_t *data, size_t len, const su_timing_t *t,
                  rmt_symbol_word_t *out, size_t out_words);
 

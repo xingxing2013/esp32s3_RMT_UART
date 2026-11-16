@@ -44,7 +44,15 @@ static void su_tx_task(void *arg)
             continue;
         }
 
-        err = rmt_tx_wait_all_done(u->tx_ch, 500);
+        /* 一个 chunk 的空中时间 = 64 字节 × 10 bit，按实际波特率放大 2 倍再加余量 */
+        uint32_t chunk_ms = (uint32_t)((uint64_t)SU_TX_CHUNK_BYTES * 10ull * 1000ull /
+                                       u->cfg.baud);
+        int wait_ms = (int)(chunk_ms * 2u + 200u);
+        if (wait_ms < 500) {
+            wait_ms = 500;
+        }
+
+        err = rmt_tx_wait_all_done(u->tx_ch, wait_ms);
         if (err != ESP_OK) {
             u->stats.tx_errors++;
             ESP_LOGW(TAG, "tx wait failed: %s", esp_err_to_name(err));
