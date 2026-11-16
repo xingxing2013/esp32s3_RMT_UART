@@ -244,7 +244,12 @@ static void dec_edge(su_decoder_t *d, int level, uint32_t duration)
         dec_frame_consume(d, level, start, end);
     }
 
-    if (!d->in_frame && level == 0 && d->prev_valid && d->prev_level == 1) {
+    bool first_low_is_start = !d->prev_valid && level == 0 &&
+                              duration < d->t.frame_ticks;
+    if (!d->in_frame && level == 0 &&
+        ((d->prev_valid && d->prev_level == 1) || first_low_is_start)) {
+        /* 冷启动：RMT 不为布防前的空闲期产生 symbol，首个低电平可能就是起始位；
+           但被拉低的长电平（≥ 10 bit）不按起始位处理 */
         dec_frame_begin(d, start);
         dec_frame_consume(d, level, start, end);
     }

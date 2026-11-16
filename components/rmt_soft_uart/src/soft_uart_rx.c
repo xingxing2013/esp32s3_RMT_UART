@@ -45,6 +45,17 @@ static bool IRAM_ATTR su_rx_done_cb(rmt_channel_handle_t channel,
         __atomic_fetch_add(&u->stats.rx_overflow, 1, __ATOMIC_RELAXED);
     }
     if (edata->flags.is_last) {
+        /* 事务因空闲结束：紧跟着补一个空闲符号，保证解码顺序正确，
+           任务可以在排空之前立刻重新布防，缩短未布防窗口 */
+        rmt_symbol_word_t idle = {
+            .level0 = 1,
+            .duration0 = u->timing.frame_ticks,
+            .level1 = 1,
+            .duration1 = 0,
+        };
+        if (su_symbol_ring_push_from_isr(u->ring, &idle, 1) != 1) {
+            __atomic_fetch_add(&u->stats.rx_overflow, 1, __ATOMIC_RELAXED);
+        }
         u->rx_need_rearm = true;
     }
     if (u->rx_task) {
@@ -64,14 +75,7 @@ static void su_rx_task(void *arg)
             break;
         }
 
-        size_t n;
-        while (!u->closing && (n = su_symbol_ring_pop(u->ring, batch, 32)) > 0) {
-            su_decoder_feed(u->dec, batch, n);
-        }
-        if (u->closing) {
-            break;
-        }
-
+        /* 先重新布防，再解码；否则 3 路并发时排空 ring 的窗口会漏掉起始位 */
         if (u->rx_need_rearm) {
             u->rx_need_rearm = false;
             rmt_receive_config_t rcfg = {
@@ -91,6 +95,11 @@ static void su_rx_task(void *arg)
                 ESP_LOGW(TAG, "rmt_receive failed: %s", esp_err_to_name(err));
             }
         }
+
+        size_t n;
+        while (!u->closing && (n = su_symbol_ring_pop(u->ring, batch, 32)) > 0) {
+            su_decoder_feed(u->dec, batch, n);
+        }
     }
 
     xSemaphoreGive(u->rx_exited);
@@ -104,11 +113,11 @@ esp_err_t su_rx_create(struct rmt_soft_uart_s *u)
         .clk_src = RMT_CLK_SRC_DEFAULT,
         .resolution_hz = u->resolution_hz,
         .mem_block_symbols = SU_MEM_BLOCK_SYMS,
-        .intr_priority = 0,
+        .intr_priority = 3,
         .flags = {
             .invert_in = u->cfg.invert,
             .with_dma = 0,
-            .io_loop_back = u->cfg.internal_loopback,
+            .io_loop_back = 0,
         },
     };
     ESP_RETURN_ON_ERROR(rmt_new_rx_channel(&cfg, &u->rx_ch), TAG, "new rx channel");
@@ -150,13 +159,18 @@ esp_err_t su_rx_create(struct rmt_soft_uart_s *u)
 
 void su_rx_destroy(struct rmt_soft_uart_s *u)
 {
-    if (u->rx_ch) {
+    if (u->rx_ch && !u->rx_stopped) {
         rmt_disable(u->rx_ch);
+        u->rx_stopped = false;
         /* 关闭中断后等待可能仍在另一核执行的回调退出（回调只有 µs 级） */
         TickType_t dwell = pdMS_TO_TICKS(2);
         vTaskDelay(dwell ? dwell : 1);
         rmt_del_channel(u->rx_ch);
         u->rx_ch = NULL;
+    } else if (u->rx_ch) {
+        rmt_del_channel(u->rx_ch);
+        u->rx_ch = NULL;
+        u->rx_stopped = false;
     }
     if (u->rx_sb) {
         vStreamBufferDelete(u->rx_sb);

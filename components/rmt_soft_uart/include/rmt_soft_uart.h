@@ -22,7 +22,6 @@ typedef struct {
     int      rx_gpio;
     uint32_t baud;
     bool     invert;
-    bool     internal_loopback;
     size_t   rx_buffer_bytes;
     size_t   tx_buffer_bytes;
 } rmt_soft_uart_config_t;

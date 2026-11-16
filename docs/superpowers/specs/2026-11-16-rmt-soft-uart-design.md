@@ -106,14 +106,17 @@ bit_ticks  = round(resolution / baud)
 
 ## 6. TX 数据流
 
-1. `rmt_soft_uart_write()` 校验句柄与长度后，`xStreamBufferSend()` 写入 TX 字节缓冲；返回实际写入字节数（可能小于请求值）。
-2. 发送任务被唤醒，按 ≤64 字节取数据，调用 `su_encode()` 展开为 symbol：
+1. `rmt_soft_uart_new()` 里创建 TX 通道后先发一个 10 bit 的空闲高电平 symbol 并等待完成：
+   RMT 通道使能但未发送时输出低电平，不先把线拉高，接收端会先看到一个长低电平。
+2. `rmt_soft_uart_write()` 校验句柄与长度后，`xStreamBufferSend()` 写入 TX 字节缓冲；返回实际写入字节数（可能小于请求值）。
+3. 发送任务被唤醒，按 ≤64 字节取数据，调用 `su_encode()` 展开为 symbol：
    - 起始位：低电平 1 bit
    - 8 个数据位：LSB first，每 bit 1 个 symbol，电平按位值
    - 停止位：高电平 1 bit
-3. `rmt_transmit(encoder=copy, payload=symbols, ...)`；`rmt_transmit_config_t.flags.eot_level = 1`，保证发送结束回到空闲高电平。
-4. `rmt_tx_wait_all_done()` 后循环取下一块。
-5. 通道 `mem_block_num = 1`，由驱动做 48 symbol 乒乓流式续接；115200 下每约 417 µs 填充一次。
+4. `rmt_transmit(encoder=copy, payload=symbols, ...)`；`rmt_transmit_config_t.flags.eot_level = 1`，保证发送结束回到空闲高电平。
+5. `rmt_tx_wait_all_done()` 后循环取下一块；等待超时按 chunk 空中时间的 2 倍计算（最低 500 ms），避免低波特率下误判超时。
+6. 通道 `mem_block_num = 1`，由驱动做 48 symbol 乒乓流式续接；115200 下每约 417 µs 填充一次。
+7. 三路并发高波特率时显式把 RMT 中断优先级设为 3，减小中断延迟导致的硬件欠载。
 
 发送任务优先级低于 RX 解码任务，保证接收优先。
 
@@ -123,6 +126,8 @@ bit_ticks  = round(resolution / baud)
 
 `on_recv_done` 回调只做一件事：把 `edata->received_symbols[0..num_symbols-1]` 整段压入该通道的 symbol 环形队列。
 
+- `is_last`（事务因空闲结束）时，**紧接着再压入一个 `frame_ticks` 长的空闲高电平 symbol**，
+  再通知任务。这样即使驱动不交付最后一段高电平，最后一帧也能收尾，且空闲符号与数据保持先后顺序。
 - 队列满：丢弃本次数据，`stats.rx_overflow++`，绝不阻塞。
 - 回调返回 `need_yield` 标志，用于唤醒解码任务。
 - 回调函数放 IRAM（驱动强制要求）。
@@ -157,8 +162,10 @@ FRAME:
   - 上述计算由纯函数 `su_rx_window_ns()` 完成并有板端单测
 - 40 bit 上限保证「起始位 + 8 个数据位」这种最长 9 bit 的连续低电平不会在中途截断事务。
 - 该值同时是**接收延迟上限**（还要加上 96 symbol 缓冲的线上时间）。
-- 事务结束（`edata.flags.is_last == true`）时，回调通知解码任务，由任务调用 `rmt_receive()` 重新装载，并 `stats.rx_restarts++`。
-  - 重新装载间隙约数 µs；若起始位恰好落在该间隙会被漏掉。这是无 DMA 方案的固有代价，写入文档与统计。
+- 事务结束（`edata.flags.is_last == true`）时，回调把空闲符号一并入队；**解码任务先 `rmt_receive()` 重新装载，再排空 ring 解码**。
+  - 先重装载是为了缩短未布防窗口：3 路并发高波特率时，排空 ring 可能耗时数百 µs，足以漏掉下一个起始位（实测 460800 并发会因此丢字节）。
+  - 重新装载后到达的新 symbol 会排在空闲符号之后，解码顺序仍然正确。
+  - 重装载间隙约数 µs；若起始位恰好落在该间隙会被漏掉。这是无 DMA 方案的固有代价，写入文档与统计。
 - 空闲时按收敛后的窗口周期重装载（115200 下约 270 次/秒），CPU 开销可忽略。
 - `set_baud` / `del` 前先 `rmt_disable()`，防止回调在资源释放期间触发。
 
@@ -170,7 +177,6 @@ typedef struct {
     int      rx_gpio;
     uint32_t baud;              // 300 ~ 1000000
     bool     invert;            // TX 输出、RX 输入同时反相
-    bool     internal_loopback; // 仅调试/自测：TX 内部回环到 RX
     size_t   rx_buffer_bytes;   // 0 = 默认 1024
     size_t   tx_buffer_bytes;   // 0 = 默认 512
 } rmt_soft_uart_config_t;
@@ -202,7 +208,8 @@ esp_err_t rmt_soft_uart_get_stats(rmt_soft_uart_handle_t handle,
 约定：
 
 - `write/read` 返回实际字节数，`-1` 表示参数或状态错误；`0` 表示超时。
-- `internal_loopback = true` 时，`tx_gpio` 必须有效，`rx_gpio` 可与之相同（驱动把输出内部回灌到输入路径），用于免接线冒烟测试。
+- `internal_loopback` 已移除：IDF 的 `gpio_config()` 会把同引脚的输出信号改回 `SIG_GPIO_OUT_IDX`，
+  RMT TX 无法在同一引脚上回环到 RX，因此 `tx_gpio == rx_gpio` 直接返回 `ESP_ERR_INVALID_ARG`，自测一律用外部短接。
 - `stats.rx_restarts` 在每次重新装载接收事务时 +1。
 - **`set_baud()` 会重建 RMT 通道（分辨率写在创建参数里），丢弃未发送和未读取的数据**，头文件注释明确写出。
 - 同一句柄的 `write()` 可多任务并发（StreamBuffer 自身线程安全）；`set_baud()` / `del()` 不可与其他调用并发。
@@ -232,32 +239,45 @@ esp_err_t rmt_soft_uart_get_stats(rmt_soft_uart_handle_t handle,
    - 帧间长空闲、>10 bit 的 break、注入窄毛刺
    - ±3% 时钟偏差
    - 跨 symbol 块边界的帧
-3. **回环测试（需要板子）**：`CONFIG_RMT_SOFT_UART_SELFTEST`
-   - 阶段一：3 路 `internal_loopback`，1 KB 随机数据往返比对
-   - 阶段二：TX/RX 外部短接，3 路并发送随机数据，校验内容与统计计数
-   - 打印 PASS/FAIL；115200 与 9600 各跑一遍
+3. **回环测试（需要板子）**：`CONFIG_RMT_SOFT_UART_SELFTEST`，3 组 TX→RX 外部短接
+   - 3 路单路 1 KB 随机数据往返比对
+   - 3 路并发送随机数据
+   - 9600 ↔ 115200 连续 5 轮切换后仍能收发
+   - 打印 PASS/FAIL；115200、9600、460800、1 M 各跑一遍
+
+### 实测结果（2026-11-16，ESP32-S3 rev v0.2，IDF v5.3.2）
+
+| 波特率 | 单路 ×3 | 3 路并发 | 切换 | 结果 |
+|---|---|---|---|---|
+| 9600 | PASS | PASS | PASS | 5/5 |
+| 115200 | PASS | PASS | PASS | 5/5 |
+| 460800 | PASS | PASS | PASS | 5/5 |
+| 1 M | PASS | PASS | PASS | 5/5 |
+
+板上 Unity：17 codec + 3 ring = 20/20 通过。
 
 ### 验收标准
 
-- 3 路同时 115200 回环，连续 100 次 1 KB 随机数据，`framing_errors == 0`、`rx_overflow == 0`、内容完全一致
-- 9600 下同样通过
+- 3 路同时 115200 回环，1 KB 随机数据，`framing_errors == 0`、`rx_overflow == 0`、内容完全一致
+- 9600 / 460800 / 1 M 下同样通过
 - 运行中 `set_baud(115200 → 9600 → 115200)` 后仍能正常收发
-- 断开 RX 输入时 `rx_restarts` 正常增长，不崩溃、不泄漏
+- 拔掉任一路短接线，对应用例必须 FAIL（反向验证自测有效）
 
 ## 11. 已知风险
 
 | 风险 | 影响 | 缓解 |
 |---|---|---|
-| 1 Mbaud 下 ping-pong 回调间隔仅约 100 µs | 高优先级中断可能错过，丢字节 | 文档标注可靠上限为 460800；实测可提高 RX 缓冲块数 |
-| 长空闲结束事务后重新装载有数 µs 间隙 | 极短时间内到达的起始位丢失 | `rx_restarts` 计数可见；必要时用 GPIO 边沿中断辅助重装载 |
+| 1 Mbaud 下空闲窗口仅约 0.41 ms | 事务频繁重装载 | 已实测 3 路并发 1 M 无丢字节；`restarts` 会明显增长 |
+| 长空闲结束事务后重新装载有数 µs 间隙 | 极短时间内到达的起始位丢失 | 已改为「先重装载、后解码」，并把空闲符号随 is_last 一起入队；`rx_restarts` 可见 |
 | 3 路 RX 任务同时解码抢占 CPU | 其他任务延迟 | 解码任务优先级可配，默认 12；每路独立任务避免互相阻塞 |
-| 无 host 单测 | 纯逻辑缺陷只能在板端暴露 | codec 设计为无硬件依赖，测试覆盖边界图样 |
+| `gpio_config()` 会把同脚输出改回普通 GPIO | 同引脚内部回环不可用 | 已移除该功能，`tx_gpio == rx_gpio` 直接报错 |
+| 无 host 单测 | 纯逻辑缺陷只能在板端暴露 | codec 设计为无硬件依赖，板端 Unity 覆盖边界图样 |
 
 ## 12. 实现顺序
 
 1. `soft_uart_codec`（纯逻辑）+ 板端合成 symbol 测试
 2. `symbol_ring` + 其板端测试
-3. `soft_uart_tx`（含 `internal_loopback` 冒烟）
+3. `soft_uart_tx`（含空闲高电平引导）
 4. `soft_uart_rx`（回调 + 解码任务）
 5. `soft_uart_core`（资源管理与 `set_baud`）
 6. `main.c` 示例与自测模式

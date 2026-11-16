@@ -66,8 +66,8 @@ static void test_ring_wrap_split(void)
     TEST_ASSERT_NOT_NULL(r);
 
     /* 先填 6 个，再取 1 个，使 head 停在 6；随后 push 3 个必然跨越缓冲末尾 */
-    rmt_symbol_word_t in[8];
-    for (int i = 0; i < 8; i++) {
+    rmt_symbol_word_t in[9];
+    for (int i = 0; i < 9; i++) {
         in[i] = make_sym((uint32_t)(i + 1));
     }
     TEST_ASSERT_EQUAL_size_t(6, su_symbol_ring_push_from_isr(r, in, 6));

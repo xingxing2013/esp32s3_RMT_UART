@@ -54,6 +54,7 @@ struct rmt_soft_uart_s {
 
     volatile bool closing;
     volatile bool rx_need_rearm;
+    volatile bool rx_stopped;
 
     bool valid;
     rmt_soft_uart_stats_t stats;

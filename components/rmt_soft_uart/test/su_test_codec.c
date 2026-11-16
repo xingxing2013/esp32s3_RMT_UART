@@ -205,7 +205,7 @@ static void test_decode_with_idle_gaps_and_split_symbols(void)
     for (size_t i = 0; i < sizeof(src); i++) {
         rmt_symbol_word_t one[5];
         TEST_ASSERT_EQUAL_size_t(5, su_encode(&src[i], 1, &t, one, 5));
-        words += append_idle(stream, words, 100000); /* 32767 拆分的长空闲 */
+        words = append_idle(stream, words, 100000); /* 32767 拆分的长空闲 */
         memcpy(&stream[words], one, sizeof(one));
         words += 5;
     }
@@ -435,6 +435,94 @@ static void test_decode_recovers_after_symbol_loss(void)
     su_decoder_destroy(d);
 }
 
+static void test_decode_skips_leading_low_run(void)
+{
+    uint32_t res = 0;
+    su_timing_t t = {0};
+    TEST_ASSERT_EQUAL(ESP_OK, su_timing_init(115200, &res, &t));
+
+    /* 布防时线路被拉低（TX 未初始化）产生的长低电平，不应被当成帧或 break */
+    const uint8_t src[4] = {0x75, 0xA3, 0x00, 0xFF};
+    rmt_symbol_word_t syms[4 * 5];
+    TEST_ASSERT_EQUAL_size_t(20, su_encode(src, 4, &t, syms, 20));
+
+    rmt_symbol_word_t stream[32];
+    size_t words = 0;
+    stream[words].level0 = 0; /* 50 bit 低电平 */
+    stream[words].duration0 = 50 * t.bit_ticks;
+    stream[words].level1 = 1;
+    stream[words].duration1 = 10 * t.bit_ticks;
+    words++;
+    memcpy(&stream[words], syms, sizeof(syms));
+    words += 20;
+
+    rx_sink_t sink = {0};
+    su_decoder_t *d = su_decoder_create(&t, sink_cb, &sink);
+    TEST_ASSERT_NOT_NULL(d);
+    su_decoder_feed(d, stream, words);
+    TEST_ASSERT_EQUAL_UINT32(4, sink.n);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(src, sink.buf, 4);
+    TEST_ASSERT_EQUAL_UINT32(0, sink.fe);
+    /* 布防时就被拉低的线路会被报告为一次 break（不投递字节） */
+    TEST_ASSERT_EQUAL_UINT32(1, sink.br);
+    su_decoder_destroy(d);
+}
+
+static void test_decode_cold_start_first_symbol_is_start_bit(void)
+{
+    uint32_t res = 0;
+    su_timing_t t = {0};
+    TEST_ASSERT_EQUAL(ESP_OK, su_timing_init(115200, &res, &t));
+
+    /* RMT 不为布防前的空闲期产生 symbol，流的第一个 symbol 就是起始位 */
+    const uint8_t src[3] = {0x75, 0x00, 0xFF};
+    rmt_symbol_word_t syms[3 * 5];
+    TEST_ASSERT_EQUAL_size_t(15, su_encode(src, 3, &t, syms, 15));
+
+    rx_sink_t sink = {0};
+    su_decoder_t *d = su_decoder_create(&t, sink_cb, &sink);
+    TEST_ASSERT_NOT_NULL(d);
+    su_decoder_feed(d, syms, 15);
+    TEST_ASSERT_EQUAL_UINT32(3, sink.n);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(src, sink.buf, 3);
+    TEST_ASSERT_EQUAL_UINT32(0, sink.fe);
+    TEST_ASSERT_EQUAL_UINT32(0, sink.br);
+    su_decoder_destroy(d);
+}
+
+static void test_decode_flush_idle_completes_last_byte(void)
+{
+    uint32_t res = 0;
+    su_timing_t t = {0};
+    TEST_ASSERT_EQUAL(ESP_OK, su_timing_init(115200, &res, &t));
+
+    /* 模拟 RMT 没交付最后一段高电平：停止位缺失，帧停在 next_sample==8 */
+    rmt_symbol_word_t syms[5] = {0};
+    const uint8_t src = 0x3C;
+    TEST_ASSERT_EQUAL_size_t(5, su_encode(&src, 1, &t, syms, 5));
+    syms[4].level1 = 1;
+    syms[4].duration1 = 0;
+
+    rx_sink_t sink = {0};
+    su_decoder_t *d = su_decoder_create(&t, sink_cb, &sink);
+    TEST_ASSERT_NOT_NULL(d);
+    su_decoder_feed(d, syms, 5);
+    TEST_ASSERT_EQUAL_UINT32(0, sink.n);
+
+    /* 驱动在事务结束时由 ISR 补入的空闲符号 */
+    rmt_symbol_word_t idle = {
+        .level0 = 1,
+        .duration0 = t.frame_ticks,
+        .level1 = 1,
+        .duration1 = 0,
+    };
+    su_decoder_feed(d, &idle, 1);
+    TEST_ASSERT_EQUAL_UINT32(1, sink.n);
+    TEST_ASSERT_EQUAL_UINT8(src, sink.buf[0]);
+    TEST_ASSERT_EQUAL_UINT32(0, sink.fe);
+    su_decoder_destroy(d);
+}
+
 int su_test_codec_run(void)
 {
     UNITY_BEGIN();
@@ -452,5 +540,8 @@ int su_test_codec_run(void)
     RUN_TEST(test_rx_window_limits);
     RUN_TEST(test_break_boundary);
     RUN_TEST(test_decode_recovers_after_symbol_loss);
+    RUN_TEST(test_decode_skips_leading_low_run);
+    RUN_TEST(test_decode_cold_start_first_symbol_is_start_bit);
+    RUN_TEST(test_decode_flush_idle_completes_last_byte);
     return UNITY_END();
 }

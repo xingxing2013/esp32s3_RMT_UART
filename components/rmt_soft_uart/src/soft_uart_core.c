@@ -47,8 +47,9 @@ static void su_pins_release(int tx_gpio, int rx_gpio)
 static void su_stop_workers(struct rmt_soft_uart_s *u)
 {
     /* 先停 RX，避免回调继续往任务里塞数据；TX 让任务自然收尾 */
-    if (u->rx_ch) {
+    if (u->rx_ch && !u->rx_stopped) {
         rmt_disable(u->rx_ch);
+        u->rx_stopped = true;
     }
 
     u->closing = true;
@@ -85,6 +86,7 @@ static esp_err_t su_setup(struct rmt_soft_uart_s *u)
 {
     u->closing = false;
     u->rx_need_rearm = false;
+    u->rx_stopped = false;
 
     ESP_RETURN_ON_ERROR(su_timing_init(u->cfg.baud, &u->resolution_hz, &u->timing),
                         TAG, "timing init");
@@ -116,8 +118,9 @@ esp_err_t rmt_soft_uart_new(const rmt_soft_uart_config_t *cfg,
         ESP_LOGE(TAG, "invalid gpio tx=%d rx=%d", cfg->tx_gpio, cfg->rx_gpio);
         return ESP_ERR_INVALID_ARG;
     }
-    if (cfg->tx_gpio == cfg->rx_gpio && !cfg->internal_loopback) {
-        ESP_LOGE(TAG, "tx/rx share gpio %d without internal_loopback", cfg->tx_gpio);
+    if (cfg->tx_gpio == cfg->rx_gpio) {
+        /* IDF 的 gpio_config() 会把同脚的输出信号改回普通 GPIO，RMT TX 无法回环到 RX */
+        ESP_LOGE(TAG, "tx and rx must use different gpio (got %d)", cfg->tx_gpio);
         return ESP_ERR_INVALID_ARG;
     }
     if (cfg->baud < RMT_SOFT_UART_BAUD_MIN || cfg->baud > RMT_SOFT_UART_BAUD_MAX) {

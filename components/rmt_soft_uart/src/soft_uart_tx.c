@@ -75,11 +75,11 @@ esp_err_t su_tx_create(struct rmt_soft_uart_s *u)
         .resolution_hz = u->resolution_hz,
         .mem_block_symbols = SU_MEM_BLOCK_SYMS,
         .trans_queue_depth = 4,
-        .intr_priority = 0,
+        .intr_priority = 3,
         .flags = {
             .invert_out = u->cfg.invert,
             .with_dma = 0,
-            .io_loop_back = u->cfg.internal_loopback,
+            .io_loop_back = 0,
             .io_od_mode = 0,
         },
     };
@@ -97,6 +97,24 @@ esp_err_t su_tx_create(struct rmt_soft_uart_s *u)
     }
 
     ESP_RETURN_ON_ERROR(rmt_enable(u->tx_ch), TAG, "enable tx channel");
+
+    /* RMT 通道使能但未发送时输出低电平，先把线拉到空闲高，否则 RX 会先看到一个长低电平 */
+    rmt_symbol_word_t idle_symbol = {
+        .level0 = 1,
+        .duration0 = u->timing.bit_ticks * 10u,
+        .level1 = 1,
+        .duration1 = 0,
+    };
+    rmt_transmit_config_t idle_cfg = {
+        .loop_count = 0,
+        .flags = {
+            .eot_level = 1,
+        },
+    };
+    ESP_RETURN_ON_ERROR(rmt_transmit(u->tx_ch, u->encoder, &idle_symbol,
+                                     sizeof(idle_symbol), &idle_cfg),
+                        TAG, "idle prime");
+    rmt_tx_wait_all_done(u->tx_ch, 100);
 
     if (xTaskCreate(su_tx_task, "su_tx", SU_TX_STACK, u, SU_TX_PRIO, &u->tx_task) != pdPASS) {
         u->tx_task = NULL;

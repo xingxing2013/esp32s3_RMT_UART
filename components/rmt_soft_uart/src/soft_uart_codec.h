@@ -47,6 +47,7 @@ size_t su_encode(const uint8_t *data, size_t len, const su_timing_t *t,
 
 su_decoder_t *su_decoder_create(const su_timing_t *t, su_byte_cb_t cb, void *ctx);
 void su_decoder_reset(su_decoder_t *d);
+
 void su_decoder_feed(su_decoder_t *d, const rmt_symbol_word_t *syms, size_t n);
 void su_decoder_destroy(su_decoder_t *d);
 
