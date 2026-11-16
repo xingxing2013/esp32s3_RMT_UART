@@ -77,7 +77,7 @@ static bool run_case(const ch_desc_t *ch, uint32_t baud, size_t len)
     };
 
     rmt_uart_handle_t u = NULL;
-    esp_err_t err = rmt_uart_new(&cfg, &u);
+    esp_err_t err = rmt_uart_init(&cfg, &u);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "%s @%u: new failed: %s", ch->name, (unsigned)baud,
                  esp_err_to_name(err));
@@ -89,7 +89,7 @@ static bool run_case(const ch_desc_t *ch, uint32_t baud, size_t len)
     if (!tx || !rx) {
         free(tx);
         free(rx);
-        rmt_uart_del(u);
+        rmt_uart_deinit(u);
         return false;
     }
     fill_random(tx, len);
@@ -131,7 +131,7 @@ static bool run_case(const ch_desc_t *ch, uint32_t baud, size_t len)
 
     free(tx);
     free(rx);
-    rmt_uart_del(u);
+    rmt_uart_deinit(u);
     return ok;
 }
 
@@ -151,7 +151,7 @@ static bool run_concurrent(const ch_desc_t chs[SELFTEST_CHANNELS], uint32_t baud
             .rx_buffer_bytes = 4096,
             .tx_buffer_bytes = 2048,
         };
-        if (rmt_uart_new(&cfg, &handles[i]) != ESP_OK) {
+        if (rmt_uart_init(&cfg, &handles[i]) != ESP_OK) {
             ESP_LOGE(TAG, "concurrent %s: new failed", chs[i].name);
             goto cleanup;
         }
@@ -212,7 +212,7 @@ cleanup:
         free(tx[i]);
         free(rx[i]);
         if (handles[i]) {
-            rmt_uart_del(handles[i]);
+            rmt_uart_deinit(handles[i]);
         }
     }
     if (!ok) {
@@ -233,7 +233,7 @@ static bool run_baud_switch(uint32_t baud_a, uint32_t baud_b)
     };
 
     rmt_uart_handle_t u = NULL;
-    esp_err_t err = rmt_uart_new(&cfg, &u);
+    esp_err_t err = rmt_uart_init(&cfg, &u);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "baud-switch: new failed: %s", esp_err_to_name(err));
         return false;
@@ -268,7 +268,7 @@ static bool run_baud_switch(uint32_t baud_a, uint32_t baud_b)
              (unsigned)st.framing_errors, (unsigned)st.rx_overflow,
              (unsigned)st.rx_restarts);
 
-    rmt_uart_del(u);
+    rmt_uart_deinit(u);
     return ok;
 }
 

@@ -15,11 +15,11 @@
 static const char *TAG = "ru_core";
 
 /* RMT group 时钟：RMT_CLK_SRC_DEFAULT 在 S3 上为 APB 80 MHz */
-#define ru_FILTER_CLK_HZ 80000000u
+#define RU_FILTER_CLK_HZ 80000000u
 
 /* 引脚占用登记，防止两个句柄悄悄抢同一个脚 */
-#define ru_PIN_SLOTS 64
-static bool s_pin_used[ru_PIN_SLOTS];
+#define RU_PIN_SLOTS 64
+static bool s_pin_used[RU_PIN_SLOTS];
 static portMUX_TYPE s_pin_mux = portMUX_INITIALIZER_UNLOCKED;
 
 static bool ru_pins_claim(int tx_gpio, int rx_gpio)
@@ -88,9 +88,9 @@ static esp_err_t ru_setup(struct rmt_uart_s *u)
     u->rx_need_rearm = false;
     u->rx_stopped = false;
 
-    ESP_RETURN_ON_ERROR(ru_timing_init(u->cfg.baud, &u->resolution_hz, &u->timing),
+    ESP_RETURN_ON_ERROR(ru_timing_init(u->cfg.baud, u->cfg.data_bits, u->cfg.parity, u->cfg.stop_bits, &u->resolution_hz, &u->timing),
                         TAG, "timing init");
-    ESP_RETURN_ON_ERROR(ru_rx_window_ns(u->cfg.baud, u->resolution_hz, ru_FILTER_CLK_HZ,
+    ESP_RETURN_ON_ERROR(ru_rx_window_ns(u->cfg.baud, u->resolution_hz, RU_FILTER_CLK_HZ,
                                         &u->rx_min_ns, &u->rx_max_ns),
                         TAG, "rx window");
 
@@ -107,14 +107,14 @@ static esp_err_t ru_setup(struct rmt_uart_s *u)
     return ESP_OK;
 }
 
-esp_err_t rmt_uart_new(const rmt_uart_config_t *cfg,
+esp_err_t rmt_uart_init(const rmt_uart_config_t *cfg,
                             rmt_uart_handle_t *out_handle)
 {
     if (!cfg || !out_handle) {
         return ESP_ERR_INVALID_ARG;
     }
     if (!GPIO_IS_VALID_OUTPUT_GPIO(cfg->tx_gpio) || !GPIO_IS_VALID_GPIO(cfg->rx_gpio) ||
-        cfg->tx_gpio >= ru_PIN_SLOTS || cfg->rx_gpio >= ru_PIN_SLOTS) {
+        cfg->tx_gpio >= RU_PIN_SLOTS || cfg->rx_gpio >= RU_PIN_SLOTS) {
         ESP_LOGE(TAG, "invalid gpio tx=%d rx=%d", cfg->tx_gpio, cfg->rx_gpio);
         return ESP_ERR_INVALID_ARG;
     }
@@ -123,7 +123,7 @@ esp_err_t rmt_uart_new(const rmt_uart_config_t *cfg,
         ESP_LOGE(TAG, "tx and rx must use different gpio (got %d)", cfg->tx_gpio);
         return ESP_ERR_INVALID_ARG;
     }
-    if (cfg->baud < rmt_uart_BAUD_MIN || cfg->baud > rmt_uart_BAUD_MAX) {
+    if (cfg->baud < RMT_UART_BAUD_MIN || cfg->baud > RMT_UART_BAUD_MAX) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -135,10 +135,13 @@ esp_err_t rmt_uart_new(const rmt_uart_config_t *cfg,
     esp_err_t err = ESP_ERR_NO_MEM;
     u->cfg = *cfg;
     if (u->cfg.rx_buffer_bytes == 0) {
-        u->cfg.rx_buffer_bytes = ru_DEFAULT_RX_BYTES;
+        u->cfg.rx_buffer_bytes = RU_DEFAULT_RX_BYTES;
+    }
+    if (u->cfg.data_bits == 0) {
+        u->cfg.data_bits = 8;
     }
     if (u->cfg.tx_buffer_bytes == 0) {
-        u->cfg.tx_buffer_bytes = ru_DEFAULT_TX_BYTES;
+        u->cfg.tx_buffer_bytes = RU_DEFAULT_TX_BYTES;
     }
 
     if (!ru_pins_claim(u->cfg.tx_gpio, u->cfg.rx_gpio)) {
@@ -179,7 +182,7 @@ fail:
     return err;
 }
 
-esp_err_t rmt_uart_del(rmt_uart_handle_t u)
+esp_err_t rmt_uart_deinit(rmt_uart_handle_t u)
 {
     if (!u) {
         return ESP_ERR_INVALID_ARG;
@@ -202,7 +205,7 @@ esp_err_t rmt_uart_set_baud(rmt_uart_handle_t u, uint32_t baud)
     if (!u || !u->valid) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (baud < rmt_uart_BAUD_MIN || baud > rmt_uart_BAUD_MAX) {
+    if (baud < RMT_UART_BAUD_MIN || baud > RMT_UART_BAUD_MAX) {
         return ESP_ERR_INVALID_ARG;
     }
 

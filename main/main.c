@@ -18,7 +18,7 @@ typedef struct {
     int rx_gpio;
 } ch_cfg_t;
 
-static const ch_cfg_t channels[rmt_uart_MAX_CHANNELS] = {
+static const ch_cfg_t channels[RMT_UART_MAX_PORTS] = {
     {"ch0", CONFIG_RMT_UART_CH0_TX_GPIO, CONFIG_RMT_UART_CH0_RX_GPIO},
     {"ch1", CONFIG_RMT_UART_CH1_TX_GPIO, CONFIG_RMT_UART_CH1_RX_GPIO},
     {"ch2", CONFIG_RMT_UART_CH2_TX_GPIO, CONFIG_RMT_UART_CH2_RX_GPIO},
@@ -43,7 +43,7 @@ static void stats_task(void *arg)
 
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(5000));
-        for (int i = 0; i < rmt_uart_MAX_CHANNELS; i++) {
+        for (int i = 0; i < RMT_UART_MAX_PORTS; i++) {
             rmt_uart_stats_t st = {0};
             if (rmt_uart_get_stats(handles[i], &st) == ESP_OK) {
                 ESP_LOGI(TAG, "%s tx=%u rx=%u fe=%u brk=%u ovf=%u restarts=%u",
@@ -81,9 +81,9 @@ void app_main(void)
     ru_selftest_run();
 #endif
 
-    static rmt_uart_handle_t handles[rmt_uart_MAX_CHANNELS];
+    static rmt_uart_handle_t handles[RMT_UART_MAX_PORTS];
 
-    for (int i = 0; i < rmt_uart_MAX_CHANNELS; i++) {
+    for (int i = 0; i < RMT_UART_MAX_PORTS; i++) {
         rmt_uart_config_t cfg = {
             .tx_gpio = channels[i].tx_gpio,
             .rx_gpio = channels[i].rx_gpio,
@@ -91,7 +91,7 @@ void app_main(void)
             .rx_buffer_bytes = 2048,
             .tx_buffer_bytes = 1024,
         };
-        ESP_ERROR_CHECK(rmt_uart_new(&cfg, &handles[i]));
+        ESP_ERROR_CHECK(rmt_uart_init(&cfg, &handles[i]));
         xTaskCreate(echo_task, channels[i].name, 3072, handles[i], 8, NULL);
         ESP_LOGI(TAG, "%s started tx=%d rx=%d baud=%d", channels[i].name,
                  channels[i].tx_gpio, channels[i].rx_gpio,

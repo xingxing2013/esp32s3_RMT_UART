@@ -177,7 +177,7 @@ void ru_diag_run(uint32_t seconds, uint32_t baud, uint32_t irq_khz, uint32_t hog
             .rx_buffer_bytes = 4096,
             .tx_buffer_bytes = 2048,
         };
-        esp_err_t err = rmt_uart_new(&cfg, &handles[i]);
+        esp_err_t err = rmt_uart_init(&cfg, &handles[i]);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "ch%d new failed: %s", i, esp_err_to_name(err));
             return;
@@ -282,7 +282,7 @@ void ru_diag_run(uint32_t seconds, uint32_t baud, uint32_t irq_khz, uint32_t hog
     dump_task_stats();
 
     for (int i = 0; i < DIAG_CHANNELS; i++) {
-        rmt_uart_del(handles[i]);
+        rmt_uart_deinit(handles[i]);
     }
     ESP_LOGI(TAG, "done");
 }

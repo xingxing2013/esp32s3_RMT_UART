@@ -22,7 +22,7 @@ static void ru_tx_task(void *arg)
 
     for (;;) {
         size_t got = xStreamBufferReceive(u->tx_sb, u->tx_bytes,
-                                          ru_TX_CHUNK_BYTES, portMAX_DELAY);
+                                          RU_TX_CHUNK_BYTES, portMAX_DELAY);
         if (u->closing) {
             break;
         }
@@ -31,7 +31,7 @@ static void ru_tx_task(void *arg)
         }
 
         size_t words = ru_encode(u->tx_bytes, got, &u->timing, u->tx_syms,
-                                (size_t)ru_TX_CHUNK_BYTES * 5u);
+                                (size_t)RU_TX_CHUNK_BYTES * RU_WORDS_PER_BYTE);
         if (words == 0) {
             continue;
         }
@@ -45,7 +45,7 @@ static void ru_tx_task(void *arg)
         }
 
         /* 一个 chunk 的空中时间 = 64 字节 × 10 bit，按实际波特率放大 2 倍再加余量 */
-        uint32_t chunk_ms = (uint32_t)((uint64_t)ru_TX_CHUNK_BYTES * 10ull * 1000ull /
+        uint32_t chunk_ms = (uint32_t)((uint64_t)RU_TX_CHUNK_BYTES * 10ull * 1000ull /
                                        u->cfg.baud);
         int wait_ms = (int)(chunk_ms * 2u + 200u);
         if (wait_ms < 500) {
@@ -73,7 +73,7 @@ esp_err_t ru_tx_create(struct rmt_uart_s *u)
         .gpio_num = (gpio_num_t)u->cfg.tx_gpio,
         .clk_src = RMT_CLK_SRC_DEFAULT,
         .resolution_hz = u->resolution_hz,
-        .mem_block_symbols = ru_MEM_BLOCK_SYMS,
+        .mem_block_symbols = RU_MEM_BLOCK_SYMS,
         .trans_queue_depth = 4,
         .intr_priority = 3,
         .flags = {
@@ -89,8 +89,8 @@ esp_err_t ru_tx_create(struct rmt_uart_s *u)
     ESP_RETURN_ON_ERROR(rmt_new_copy_encoder(&enc_cfg, &u->encoder), TAG, "new encoder");
 
     u->tx_sb = xStreamBufferCreate(u->cfg.tx_buffer_bytes, 1);
-    u->tx_bytes = heap_caps_malloc(ru_TX_CHUNK_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    u->tx_syms = heap_caps_malloc((size_t)ru_TX_CHUNK_BYTES * 5u * sizeof(rmt_symbol_word_t),
+    u->tx_bytes = heap_caps_malloc(RU_TX_CHUNK_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    u->tx_syms = heap_caps_malloc((size_t)RU_TX_CHUNK_BYTES * RU_WORDS_PER_BYTE * sizeof(rmt_symbol_word_t),
                                   MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (!u->tx_sb || !u->tx_bytes || !u->tx_syms) {
         return ESP_ERR_NO_MEM;
@@ -116,7 +116,7 @@ esp_err_t ru_tx_create(struct rmt_uart_s *u)
                         TAG, "idle prime");
     rmt_tx_wait_all_done(u->tx_ch, 100);
 
-    if (xTaskCreate(ru_tx_task, "ru_tx", ru_TX_STACK, u, ru_TX_PRIO, &u->tx_task) != pdPASS) {
+    if (xTaskCreate(ru_tx_task, "ru_tx", RU_TX_STACK, u, RU_TX_PRIO, &u->tx_task) != pdPASS) {
         u->tx_task = NULL;
         return ESP_ERR_NO_MEM;
     }

@@ -20,6 +20,9 @@ static void ru_decoder_sink(void *ctx, uint8_t byte, ru_rx_flags_t flags)
     if (flags.framing_error) {
         u->stats.framing_errors++;
     }
+    if (flags.parity_error) {
+        u->stats.parity_errors++;
+    }
     if (xStreamBufferSend(u->rx_sb, &byte, 1, 0) == 1) {
         u->stats.rx_bytes++;
     } else {
@@ -39,7 +42,7 @@ static bool IRAM_ATTR ru_rx_done_cb(rmt_channel_handle_t channel,
         return false;
     }
 
-    size_t pushed = ru_rmt_uart_ring_push_from_isr(u->ring, edata->received_symbols,
+    size_t pushed = ru_ring_push_from_isr(u->ring, edata->received_symbols,
                                                  edata->num_symbols);
     if (pushed < edata->num_symbols) {
         __atomic_fetch_add(&u->stats.rx_overflow, 1, __ATOMIC_RELAXED);
@@ -53,7 +56,7 @@ static bool IRAM_ATTR ru_rx_done_cb(rmt_channel_handle_t channel,
             .level1 = 1,
             .duration1 = 0,
         };
-        if (ru_rmt_uart_ring_push_from_isr(u->ring, &idle, 1) != 1) {
+        if (ru_ring_push_from_isr(u->ring, &idle, 1) != 1) {
             __atomic_fetch_add(&u->stats.rx_overflow, 1, __ATOMIC_RELAXED);
         }
         u->rx_need_rearm = true;
@@ -86,7 +89,7 @@ static void ru_rx_task(void *arg)
                 },
             };
             esp_err_t err = rmt_receive(u->rx_ch, u->rx_buf,
-                                        (size_t)ru_RX_USER_SYMBOLS * sizeof(rmt_symbol_word_t),
+                                        (size_t)RU_RX_USER_SYMBOLS * sizeof(rmt_symbol_word_t),
                                         &rcfg);
             if (err == ESP_OK) {
                 u->stats.rx_restarts++;
@@ -97,7 +100,7 @@ static void ru_rx_task(void *arg)
         }
 
         size_t n;
-        while (!u->closing && (n = ru_rmt_uart_ring_pop(u->ring, batch, 32)) > 0) {
+        while (!u->closing && (n = ru_ring_pop(u->ring, batch, 32)) > 0) {
             ru_decoder_feed(u->dec, batch, n);
         }
     }
@@ -112,7 +115,7 @@ esp_err_t ru_rx_create(struct rmt_uart_s *u)
         .gpio_num = (gpio_num_t)u->cfg.rx_gpio,
         .clk_src = RMT_CLK_SRC_DEFAULT,
         .resolution_hz = u->resolution_hz,
-        .mem_block_symbols = ru_MEM_BLOCK_SYMS,
+        .mem_block_symbols = RU_MEM_BLOCK_SYMS,
         .intr_priority = 3,
         .flags = {
             .invert_in = u->cfg.invert,
@@ -122,9 +125,9 @@ esp_err_t ru_rx_create(struct rmt_uart_s *u)
     };
     ESP_RETURN_ON_ERROR(rmt_new_rx_channel(&cfg, &u->rx_ch), TAG, "new rx channel");
 
-    u->rx_buf = heap_caps_malloc((size_t)ru_RX_USER_SYMBOLS * sizeof(rmt_symbol_word_t),
+    u->rx_buf = heap_caps_malloc((size_t)RU_RX_USER_SYMBOLS * sizeof(rmt_symbol_word_t),
                                  MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    u->ring = ru_rmt_uart_ring_create(ru_RING_SYMBOLS);
+    u->ring = ru_ring_create(RU_RING_SYMBOLS);
     u->dec = ru_decoder_create(&u->timing, ru_decoder_sink, u);
     u->rx_sb = xStreamBufferCreate(u->cfg.rx_buffer_bytes, 1);
     if (!u->rx_buf || !u->ring || !u->dec || !u->rx_sb) {
@@ -138,7 +141,7 @@ esp_err_t ru_rx_create(struct rmt_uart_s *u)
                         TAG, "register rx callback");
     ESP_RETURN_ON_ERROR(rmt_enable(u->rx_ch), TAG, "enable rx channel");
 
-    if (xTaskCreate(ru_rx_task, "ru_rx", ru_RX_STACK, u, ru_RX_PRIO, &u->rx_task) != pdPASS) {
+    if (xTaskCreate(ru_rx_task, "ru_rx", RU_RX_STACK, u, RU_RX_PRIO, &u->rx_task) != pdPASS) {
         u->rx_task = NULL;
         return ESP_ERR_NO_MEM;
     }
@@ -151,7 +154,7 @@ esp_err_t ru_rx_create(struct rmt_uart_s *u)
         },
     };
     ESP_RETURN_ON_ERROR(rmt_receive(u->rx_ch, u->rx_buf,
-                                    (size_t)ru_RX_USER_SYMBOLS * sizeof(rmt_symbol_word_t),
+                                    (size_t)RU_RX_USER_SYMBOLS * sizeof(rmt_symbol_word_t),
                                     &rcfg),
                         TAG, "arm rx");
     return ESP_OK;
@@ -177,7 +180,7 @@ void ru_rx_destroy(struct rmt_uart_s *u)
         u->rx_sb = NULL;
     }
     if (u->ring) {
-        ru_rmt_uart_ring_destroy(u->ring);
+        ru_ring_destroy(u->ring);
         u->ring = NULL;
     }
     if (u->dec) {

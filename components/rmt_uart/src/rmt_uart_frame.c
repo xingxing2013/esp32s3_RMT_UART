@@ -4,21 +4,42 @@
 
 #include "esp_heap_caps.h"
 
-#define ru_RMT_SRC_HZ 80000000u
+#define RU_RMT_SRC_HZ 80000000u
 
-esp_err_t ru_timing_init(uint32_t baud, uint32_t *out_resolution_hz,
+static uint8_t ru_parity_bits(rmt_uart_parity_t parity)
+{
+    return parity == RMT_UART_PARITY_NONE ? 0 : 1;
+}
+
+static uint8_t ru_stop_bits_x2(rmt_uart_stop_bits_t stop)
+{
+    switch (stop) {
+    case RMT_UART_STOP_BITS_1_5:
+        return 3;
+    case RMT_UART_STOP_BITS_2:
+        return 4;
+    default:
+        return 2;
+    }
+}
+
+esp_err_t ru_timing_init(uint32_t baud, uint8_t data_bits, rmt_uart_parity_t parity,
+                         rmt_uart_stop_bits_t stop, uint32_t *out_resolution_hz,
                          ru_timing_t *out_timing)
 {
-    if (!out_timing) {
+    if (!out_timing || baud < RMT_UART_BAUD_MIN || baud > RMT_UART_BAUD_MAX) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (baud < 300 || baud > 1000000) {
+    if (data_bits < 5 || data_bits > 8) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (parity > RMT_UART_PARITY_ODD || stop > RMT_UART_STOP_BITS_2) {
         return ESP_ERR_INVALID_ARG;
     }
 
     /* N = round(80MHz / (baud * 80))，限制在 1..255 */
     uint32_t denom = baud * 80u;
-    uint32_t n = (ru_RMT_SRC_HZ + denom / 2u) / denom;
+    uint32_t n = (RU_RMT_SRC_HZ + denom / 2u) / denom;
     if (n < 1) {
         n = 1;
     }
@@ -26,20 +47,43 @@ esp_err_t ru_timing_init(uint32_t baud, uint32_t *out_resolution_hz,
         n = 255;
     }
 
-    uint32_t resolution = ru_RMT_SRC_HZ / n;
+    uint32_t resolution = RU_RMT_SRC_HZ / n;
     uint32_t bit_ticks = (resolution + baud / 2u) / baud;
     if (bit_ticks == 0) {
         bit_ticks = 1;
     }
-    if (bit_ticks > ru_MAX_BIT_TICKS) {
+    if (bit_ticks > RU_MAX_BIT_TICKS) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    out_timing->bit_ticks = bit_ticks;
-    out_timing->frame_ticks = bit_ticks * 10u;
-    for (int k = 0; k < 9; k++) {
-        out_timing->sample_off[k] = (bit_ticks * (uint32_t)(2 * k + 3) + 1u) / 2u;
+    uint8_t pbits = ru_parity_bits(parity);
+    uint8_t stop_x2 = ru_stop_bits_x2(stop);
+
+    /* 帧长（半 bit 为单位）：2*(start + data + parity) + stop */
+    uint32_t frame_x2 = 2u * (1u + data_bits + pbits) + stop_x2;
+    uint64_t frame_ticks = ((uint64_t)bit_ticks * frame_x2 + 1u) / 2u;
+    if (frame_ticks > 0xFFFFFFFFu) {
+        return ESP_ERR_INVALID_ARG;
     }
+
+    out_timing->data_bits = data_bits;
+    out_timing->parity_bits = pbits;
+    out_timing->stop_bits_x2 = stop_x2;
+    out_timing->parity = parity;
+    out_timing->bit_ticks = bit_ticks;
+    out_timing->frame_ticks = (uint32_t)frame_ticks;
+    out_timing->sample_count = (uint8_t)(data_bits + pbits + 1);
+
+    uint8_t idx = 0;
+    for (uint8_t k = 0; k < data_bits; k++) {
+        out_timing->sample_off[idx++] = (bit_ticks * (uint32_t)(2 * k + 3) + 1u) / 2u;
+    }
+    if (pbits) {
+        out_timing->sample_off[idx++] = (bit_ticks * (uint32_t)(2 * data_bits + 3) + 1u) / 2u;
+    }
+    out_timing->sample_off[idx++] =
+        (bit_ticks * (uint32_t)(2 * (data_bits + pbits) + 3) + 1u) / 2u;
+
     if (out_resolution_hz) {
         *out_resolution_hz = resolution;
     }
@@ -47,10 +91,10 @@ esp_err_t ru_timing_init(uint32_t baud, uint32_t *out_resolution_hz,
 }
 
 esp_err_t ru_rx_window_ns(uint32_t baud, uint32_t channel_resolution_hz,
-                          uint32_t filter_clock_hz,
-                          uint32_t *out_min_ns, uint32_t *out_max_ns)
+                          uint32_t filter_clock_hz, uint32_t *out_min_ns,
+                          uint32_t *out_max_ns)
 {
-    if (!out_min_ns || !out_max_ns || baud < 300 || baud > 1000000 ||
+    if (!out_min_ns || !out_max_ns || baud < RMT_UART_BAUD_MIN || baud > RMT_UART_BAUD_MAX ||
         channel_resolution_hz == 0 || filter_clock_hz == 0) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -62,7 +106,6 @@ esp_err_t ru_rx_window_ns(uint32_t baud, uint32_t channel_resolution_hz,
         max_ns = 8000000ull;
     }
 
-    /* 硬件寄存器上限：filter ≤ 255 tick，idle ≤ 32767 tick（向下取整保证不越界） */
     uint64_t filter_limit_ns = (255ull * 1000000000ull) / filter_clock_hz;
     uint64_t idle_limit_ns = (32767ull * 1000000000ull) / channel_resolution_hz;
 
@@ -86,27 +129,60 @@ esp_err_t ru_rx_window_ns(uint32_t baud, uint32_t channel_resolution_hz,
 
 size_t ru_encode(const uint8_t *data, size_t len, const ru_timing_t *t,
                  rmt_symbol_word_t *out, size_t out_words)
-{    if (!data || !t || !out || t->bit_ticks == 0) {
+{
+    if (!data || !t || !out || t->bit_ticks == 0 || t->data_bits < 5 || t->data_bits > 8) {
         return 0;
     }
-    size_t capacity_bytes = out_words / 5u;
+    size_t segs_per_byte = 1u + t->data_bits + t->parity_bits + 1u;
+    size_t words_per_byte = (segs_per_byte + 1u) / 2u;
+    size_t capacity_bytes = out_words / words_per_byte;
     if (len > capacity_bytes) {
         len = capacity_bytes;
     }
 
     size_t wi = 0;
     for (size_t i = 0; i < len; i++) {
-        uint32_t level[10];
-        level[0] = 0; /* start */
-        for (int b = 0; b < 8; b++) {
-            level[1 + b] = (data[i] >> b) & 1u; /* LSB first */
+        uint32_t level[12];
+        uint32_t duration[12];
+        size_t segs = 0;
+        uint32_t ones = 0;
+
+        level[segs] = 0; /* start */
+        duration[segs] = t->bit_ticks;
+        segs++;
+
+        for (uint8_t b = 0; b < t->data_bits; b++) {
+            uint32_t bit = (data[i] >> b) & 1u;
+            level[segs] = bit;
+            duration[segs] = t->bit_ticks;
+            segs++;
+            ones += bit;
         }
-        level[9] = 1; /* stop */
-        for (int s = 0; s < 10; s += 2) {
+
+        if (t->parity_bits) {
+            uint32_t p = ones & 1u;
+            if (t->parity == RMT_UART_PARITY_ODD) {
+                p ^= 1u;
+            }
+            level[segs] = p;
+            duration[segs] = t->bit_ticks;
+            segs++;
+        }
+
+        level[segs] = 1; /* stop，可能是 1/1.5/2 bit */
+        duration[segs] = (t->bit_ticks * t->stop_bits_x2) / 2u;
+        segs++;
+
+        for (size_t s = 0; s < segs; s += 2) {
             out[wi].level0 = level[s];
-            out[wi].duration0 = t->bit_ticks;
-            out[wi].level1 = level[s + 1];
-            out[wi].duration1 = t->bit_ticks;
+            out[wi].duration0 = duration[s];
+            if (s + 1 < segs) {
+                out[wi].level1 = level[s + 1];
+                out[wi].duration1 = duration[s + 1];
+            } else {
+                out[wi].level1 = 1;
+                out[wi].duration1 = 0;
+            }
             wi++;
         }
     }
@@ -129,26 +205,30 @@ struct ru_decoder_s {
     uint64_t frame_start;
     int next_sample;
     uint8_t data;
+    uint32_t ones;
+    bool parity_level;
+    bool stop_level;
 
     bool pending_valid;
     uint8_t pending_byte;
+    bool pending_parity;
 
     bool have_next;
     uint64_t next_start;
 };
 
-static void dec_emit(ru_decoder_t *d, uint8_t byte, bool framing_error, bool break_error)
+static void dec_emit(ru_decoder_t *d, uint8_t byte, bool framing, bool parity, bool brk)
 {
     ru_rx_flags_t flags = {
-        .framing_error = framing_error,
-        .break_error = break_error,
+        .framing_error = framing,
+        .parity_error = parity,
+        .break_error = brk,
     };
     if (d->cb) {
         d->cb(d->ctx, byte, flags);
     }
 }
 
-/* 低电平 run 结束时判定 break / 帧错误字节 */
 static void dec_run_end(ru_decoder_t *d)
 {
     if (d->run_level != 0) {
@@ -158,10 +238,10 @@ static void dec_run_end(ru_decoder_t *d)
         d->pending_valid = false;
         d->in_frame = false;
         d->have_next = false;
-        dec_emit(d, 0, false, true);
+        dec_emit(d, 0, false, false, true);
     } else if (d->pending_valid) {
         d->pending_valid = false;
-        dec_emit(d, d->pending_byte, true, false);
+        dec_emit(d, d->pending_byte, true, d->pending_parity, false);
     }
 }
 
@@ -171,6 +251,9 @@ static void dec_frame_begin(ru_decoder_t *d, uint64_t t0)
     d->frame_start = t0;
     d->next_sample = 0;
     d->data = 0;
+    d->ones = 0;
+    d->parity_level = false;
+    d->stop_level = false;
     d->have_next = false;
 }
 
@@ -179,33 +262,50 @@ static void dec_frame_consume(ru_decoder_t *d, int level, uint64_t start, uint64
     (void)start;
 
     while (d->in_frame) {
-        while (d->next_sample < 9) {
+        while (d->next_sample < d->t.sample_count) {
             uint64_t ts = d->frame_start + d->t.sample_off[d->next_sample];
             if (ts >= end) {
                 return;
             }
-            if (d->next_sample < 8) {
+            if (d->next_sample < d->t.data_bits) {
                 if (level) {
                     d->data |= (uint8_t)(1u << d->next_sample);
+                    d->ones++;
                 }
-            } else if (level) {
-                dec_emit(d, d->data, false, false);
+            } else if (d->t.parity_bits && d->next_sample == d->t.data_bits) {
+                d->parity_level = level != 0;
             } else {
-                d->pending_valid = true;
-                d->pending_byte = d->data;
+                d->stop_level = level != 0;
             }
             d->next_sample++;
+        }
+
+        bool parity_ok = true;
+        if (d->t.parity_bits) {
+            uint32_t expected = d->ones & 1u;
+            if (d->t.parity == RMT_UART_PARITY_ODD) {
+                expected ^= 1u;
+            }
+            parity_ok = (d->parity_level == (expected != 0));
         }
 
         d->in_frame = false;
         d->have_next = true;
         d->next_start = d->frame_start + d->t.frame_ticks;
 
+        if (d->stop_level) {
+            dec_emit(d, d->data, false, !parity_ok, false);
+        } else {
+            d->pending_valid = true;
+            d->pending_byte = d->data;
+            d->pending_parity = !parity_ok;
+        }
+
         if (d->next_start < end) {
             if (level == 0) {
                 d->have_next = false;
                 dec_frame_begin(d, d->next_start);
-                continue; /* 背靠背帧：同一段低电平里直接开始下一帧 */
+                continue;
             }
             d->have_next = false;
             return;
@@ -248,8 +348,6 @@ static void dec_edge(ru_decoder_t *d, int level, uint32_t duration)
                               duration < d->t.frame_ticks;
     if (!d->in_frame && level == 0 &&
         ((d->prev_valid && d->prev_level == 1) || first_low_is_start)) {
-        /* 冷启动：RMT 不为布防前的空闲期产生 symbol，首个低电平可能就是起始位；
-           但被拉低的长电平（≥ 10 bit）不按起始位处理 */
         dec_frame_begin(d, start);
         dec_frame_consume(d, level, start, end);
     }

@@ -14,16 +14,16 @@
 #include "rmt_uart_frame.h"
 #include "rmt_uart_ring.h"
 
-#define ru_TX_CHUNK_BYTES   64
-#define ru_RX_USER_SYMBOLS  96
-#define ru_RING_SYMBOLS     1024
-#define ru_MEM_BLOCK_SYMS   48
-#define ru_RX_STACK         4096
-#define ru_TX_STACK         3584
-#define ru_RX_PRIO          12
-#define ru_TX_PRIO          10
-#define ru_DEFAULT_RX_BYTES 1024
-#define ru_DEFAULT_TX_BYTES 512
+#define RU_TX_CHUNK_BYTES   64
+#define RU_RX_USER_SYMBOLS  96
+#define RU_RING_SYMBOLS     1024
+#define RU_MEM_BLOCK_SYMS   48
+#define RU_RX_STACK         4096
+#define RU_TX_STACK         3584
+#define RU_RX_PRIO          12
+#define RU_TX_PRIO          10
+#define RU_DEFAULT_RX_BYTES 1024
+#define RU_DEFAULT_TX_BYTES 512
 
 struct rmt_uart_s {
     rmt_uart_config_t cfg;
@@ -36,7 +36,7 @@ struct rmt_uart_s {
 
     StreamBufferHandle_t tx_sb;
     StreamBufferHandle_t rx_sb;
-    ru_rmt_uart_ring_t *ring;
+    ru_ring_t *ring;
     ru_decoder_t *dec;
 
     TaskHandle_t tx_task;
