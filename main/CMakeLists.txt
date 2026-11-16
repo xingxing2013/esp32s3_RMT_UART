@@ -1,3 +1,3 @@
-idf_component_register(SRCS "main.c" "su_selftest.c" "su_diag.c"
+idf_component_register(SRCS "main.c" "ru_selftest.c" "ru_diag.c"
                        INCLUDE_DIRS "."
-                       REQUIRES rmt_soft_uart esp_driver_gptimer esp_timer)
+                       REQUIRES rmt_uart esp_driver_gptimer esp_timer)

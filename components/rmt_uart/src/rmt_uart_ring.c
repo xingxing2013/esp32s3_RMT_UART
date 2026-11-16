@@ -1,4 +1,4 @@
-#include "symbol_ring.h"
+#include "rmt_uart_ring.h"
 
 #include <string.h>
 
@@ -6,7 +6,7 @@
 #include "sdkconfig.h"
 
 #if CONFIG_RMT_ISR_IRAM_SAFE
-#error "rmt_soft_uart 依赖 flash 中的 memcpy，必须关闭 CONFIG_RMT_ISR_IRAM_SAFE"
+#error "rmt_uart 依赖 flash 中的 memcpy，必须关闭 CONFIG_RMT_ISR_IRAM_SAFE"
 #endif
 
 static inline uint32_t ring_load(const volatile uint32_t *p)
@@ -19,7 +19,7 @@ static inline void ring_store(volatile uint32_t *p, uint32_t v)
     __atomic_store_n(p, v, __ATOMIC_RELEASE);
 }
 
-su_symbol_ring_t *su_symbol_ring_create(uint32_t capacity)
+ru_rmt_uart_ring_t *ru_rmt_uart_ring_create(uint32_t capacity)
 {
     if (capacity == 0) {
         return NULL;
@@ -29,7 +29,7 @@ su_symbol_ring_t *su_symbol_ring_create(uint32_t capacity)
         cap <<= 1;
     }
 
-    su_symbol_ring_t *r = heap_caps_calloc(1, sizeof(*r), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    ru_rmt_uart_ring_t *r = heap_caps_calloc(1, sizeof(*r), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (!r) {
         return NULL;
     }
@@ -44,7 +44,7 @@ su_symbol_ring_t *su_symbol_ring_create(uint32_t capacity)
     return r;
 }
 
-void su_symbol_ring_destroy(su_symbol_ring_t *r)
+void ru_rmt_uart_ring_destroy(ru_rmt_uart_ring_t *r)
 {
     if (!r) {
         return;
@@ -53,7 +53,7 @@ void su_symbol_ring_destroy(su_symbol_ring_t *r)
     heap_caps_free(r);
 }
 
-size_t su_symbol_ring_push_from_isr(su_symbol_ring_t *r,
+size_t ru_rmt_uart_ring_push_from_isr(ru_rmt_uart_ring_t *r,
                                     const rmt_symbol_word_t *src, size_t n)
 {
     if (!r || !src || n == 0) {
@@ -83,7 +83,7 @@ size_t su_symbol_ring_push_from_isr(su_symbol_ring_t *r,
     return n;
 }
 
-size_t su_symbol_ring_pop(su_symbol_ring_t *r, rmt_symbol_word_t *dst, size_t n)
+size_t ru_rmt_uart_ring_pop(ru_rmt_uart_ring_t *r, rmt_symbol_word_t *dst, size_t n)
 {
     if (!r || !dst || n == 0) {
         return 0;
@@ -111,7 +111,7 @@ size_t su_symbol_ring_pop(su_symbol_ring_t *r, rmt_symbol_word_t *dst, size_t n)
     return n;
 }
 
-size_t su_symbol_ring_count(const su_symbol_ring_t *r)
+size_t ru_rmt_uart_ring_count(const ru_rmt_uart_ring_t *r)
 {
     if (!r) {
         return 0;
@@ -119,7 +119,7 @@ size_t su_symbol_ring_count(const su_symbol_ring_t *r)
     return ring_load(&r->head) - ring_load(&r->tail);
 }
 
-void su_symbol_ring_reset(su_symbol_ring_t *r)
+void ru_rmt_uart_ring_reset(ru_rmt_uart_ring_t *r)
 {
     if (!r) {
         return;

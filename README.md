@@ -17,7 +17,7 @@
 | ch1 | GPIO40 | GPIO39 |
 | ch2 | GPIO38 | GPIO37 |
 
-引脚可在 `idf.py menuconfig -> Component config -> RMT Soft UART` 修改。
+引脚可在 `idf.py menuconfig -> Component config -> RMT UART` 修改。
 **TX 与 RX 必须是不同引脚**：IDF 的 `gpio_config()` 会把同引脚的输出信号改回普通 GPIO，
 RMT 无法在同一引脚上做内部回环，所以自测必须外部短接。
 
@@ -27,20 +27,20 @@ RMT 无法在同一引脚上做内部回环，所以自测必须外部短接。
 ## API
 
 ```c
-rmt_soft_uart_config_t cfg = {
+rmt_uart_config_t cfg = {
     .tx_gpio = 42,
     .rx_gpio = 41,
     .baud = 115200,
 };
-rmt_soft_uart_handle_t u;
-ESP_ERROR_CHECK(rmt_soft_uart_new(&cfg, &u));
+rmt_uart_handle_t u;
+ESP_ERROR_CHECK(rmt_uart_new(&cfg, &u));
 
-rmt_soft_uart_write(u, "hello", 5, pdMS_TO_TICKS(100));   // 返回实际写入字节数
+rmt_uart_write(u, "hello", 5, pdMS_TO_TICKS(100));   // 返回实际写入字节数
 uint8_t buf[16];
-int n = rmt_soft_uart_read(u, buf, sizeof(buf), pdMS_TO_TICKS(100)); // 0 = 超时
+int n = rmt_uart_read(u, buf, sizeof(buf), pdMS_TO_TICKS(100)); // 0 = 超时
 
-rmt_soft_uart_set_baud(u, 9600);   // 会重建通道并丢弃在途数据
-rmt_soft_uart_del(u);
+rmt_uart_set_baud(u, 9600);   // 会重建通道并丢弃在途数据
+rmt_uart_del(u);
 ```
 
 ## 构建
@@ -54,8 +54,8 @@ idf.py -p COMx flash monitor
 
 ## 自测
 
-- `CONFIG_RMT_SOFT_UART_RUN_TESTS`：上电跑 codec / ring 的 Unity 用例（20 个，无需接线）
-- `CONFIG_RMT_SOFT_UART_SELFTEST`：跑 5 项回环自测（都需要 3 组 TX→RX 短接线）
+- `CONFIG_rmt_uart_RUN_TESTS`：上电跑 codec / ring 的 Unity 用例（20 个，无需接线）
+- `CONFIG_rmt_uart_SELFTEST`：跑 5 项回环自测（都需要 3 组 TX→RX 短接线）
   - 3 项 `wire-*`：单路 1 KB 随机数据往返
   - 1 项 `concurrent`：3 路同时收发 1 KB
   - 1 项 `baud-switch`：9600 ↔ 115200 连续 5 轮切换后仍能收发
@@ -63,14 +63,14 @@ idf.py -p COMx flash monitor
 预期输出（接好线）：
 
 ```
-I (xxx) su_selftest: selftest summary: 5/5 passed
+I (xxx) ru_selftest: selftest summary: 5/5 passed
 ```
 
 拔掉任意一路短接线后对应用例必须变成 FAIL —— 这是验证自测本身有效的反向检查。
 
 ## 诊断与压测（可选）
 
-`idf.py menuconfig -> Component config -> RMT Soft UART`：
+`idf.py menuconfig -> Component config -> RMT UART`：
 
 - `Run 3-channel load test at boot`：3 路持续灌数据 + 独立收，统计真实丢字节与 CPU 占用
   - `Load test baud rate`：默认 1 000 000
@@ -105,7 +105,7 @@ CPU 统计依赖 `CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS`（打开压测时自�
 ### 结论
 
 - 3 路并发 1 M **短突发**可用；**持续高吞吐建议 ≤460800**
-- 单帧解码的 CPU 成本明显：1 M 时每个 `su_rx` 任务约占 18% CPU，`su_tx` 约 5%
+- 单帧解码的 CPU 成本明显：1 M 时每个 `ru_rx` 任务约占 18% CPU，`ru_tx` 约 5%
 - 额外中断会让丢字节上升 2–3 倍（仍在 0.04% 量级），但对 1 M 并发突发更敏感（约 3%）
 - 3 路 460800 持续满载时 CPU 已到 85–90%，系统接近饱和
 

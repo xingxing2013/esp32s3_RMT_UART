@@ -1,13 +1,13 @@
-#include "soft_uart_codec.h"
+#include "rmt_uart_frame.h"
 
 #include <string.h>
 
 #include "esp_heap_caps.h"
 
-#define SU_RMT_SRC_HZ 80000000u
+#define ru_RMT_SRC_HZ 80000000u
 
-esp_err_t su_timing_init(uint32_t baud, uint32_t *out_resolution_hz,
-                         su_timing_t *out_timing)
+esp_err_t ru_timing_init(uint32_t baud, uint32_t *out_resolution_hz,
+                         ru_timing_t *out_timing)
 {
     if (!out_timing) {
         return ESP_ERR_INVALID_ARG;
@@ -18,7 +18,7 @@ esp_err_t su_timing_init(uint32_t baud, uint32_t *out_resolution_hz,
 
     /* N = round(80MHz / (baud * 80))，限制在 1..255 */
     uint32_t denom = baud * 80u;
-    uint32_t n = (SU_RMT_SRC_HZ + denom / 2u) / denom;
+    uint32_t n = (ru_RMT_SRC_HZ + denom / 2u) / denom;
     if (n < 1) {
         n = 1;
     }
@@ -26,12 +26,12 @@ esp_err_t su_timing_init(uint32_t baud, uint32_t *out_resolution_hz,
         n = 255;
     }
 
-    uint32_t resolution = SU_RMT_SRC_HZ / n;
+    uint32_t resolution = ru_RMT_SRC_HZ / n;
     uint32_t bit_ticks = (resolution + baud / 2u) / baud;
     if (bit_ticks == 0) {
         bit_ticks = 1;
     }
-    if (bit_ticks > SU_MAX_BIT_TICKS) {
+    if (bit_ticks > ru_MAX_BIT_TICKS) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -46,7 +46,7 @@ esp_err_t su_timing_init(uint32_t baud, uint32_t *out_resolution_hz,
     return ESP_OK;
 }
 
-esp_err_t su_rx_window_ns(uint32_t baud, uint32_t channel_resolution_hz,
+esp_err_t ru_rx_window_ns(uint32_t baud, uint32_t channel_resolution_hz,
                           uint32_t filter_clock_hz,
                           uint32_t *out_min_ns, uint32_t *out_max_ns)
 {
@@ -84,7 +84,7 @@ esp_err_t su_rx_window_ns(uint32_t baud, uint32_t channel_resolution_hz,
     return ESP_OK;
 }
 
-size_t su_encode(const uint8_t *data, size_t len, const su_timing_t *t,
+size_t ru_encode(const uint8_t *data, size_t len, const ru_timing_t *t,
                  rmt_symbol_word_t *out, size_t out_words)
 {    if (!data || !t || !out || t->bit_ticks == 0) {
         return 0;
@@ -113,9 +113,9 @@ size_t su_encode(const uint8_t *data, size_t len, const su_timing_t *t,
     return wi;
 }
 
-struct su_decoder_s {
-    su_timing_t t;
-    su_byte_cb_t cb;
+struct ru_decoder_s {
+    ru_timing_t t;
+    ru_byte_cb_t cb;
     void *ctx;
 
     uint64_t now;
@@ -137,9 +137,9 @@ struct su_decoder_s {
     uint64_t next_start;
 };
 
-static void dec_emit(su_decoder_t *d, uint8_t byte, bool framing_error, bool break_error)
+static void dec_emit(ru_decoder_t *d, uint8_t byte, bool framing_error, bool break_error)
 {
-    su_rx_flags_t flags = {
+    ru_rx_flags_t flags = {
         .framing_error = framing_error,
         .break_error = break_error,
     };
@@ -149,7 +149,7 @@ static void dec_emit(su_decoder_t *d, uint8_t byte, bool framing_error, bool bre
 }
 
 /* 低电平 run 结束时判定 break / 帧错误字节 */
-static void dec_run_end(su_decoder_t *d)
+static void dec_run_end(ru_decoder_t *d)
 {
     if (d->run_level != 0) {
         return;
@@ -165,7 +165,7 @@ static void dec_run_end(su_decoder_t *d)
     }
 }
 
-static void dec_frame_begin(su_decoder_t *d, uint64_t t0)
+static void dec_frame_begin(ru_decoder_t *d, uint64_t t0)
 {
     d->in_frame = true;
     d->frame_start = t0;
@@ -174,7 +174,7 @@ static void dec_frame_begin(su_decoder_t *d, uint64_t t0)
     d->have_next = false;
 }
 
-static void dec_frame_consume(su_decoder_t *d, int level, uint64_t start, uint64_t end)
+static void dec_frame_consume(ru_decoder_t *d, int level, uint64_t start, uint64_t end)
 {
     (void)start;
 
@@ -214,7 +214,7 @@ static void dec_frame_consume(su_decoder_t *d, int level, uint64_t start, uint64
     }
 }
 
-static void dec_edge(su_decoder_t *d, int level, uint32_t duration)
+static void dec_edge(ru_decoder_t *d, int level, uint32_t duration)
 {
     if (duration == 0) {
         return;
@@ -259,12 +259,12 @@ static void dec_edge(su_decoder_t *d, int level, uint32_t duration)
     d->now = end;
 }
 
-su_decoder_t *su_decoder_create(const su_timing_t *t, su_byte_cb_t cb, void *ctx)
+ru_decoder_t *ru_decoder_create(const ru_timing_t *t, ru_byte_cb_t cb, void *ctx)
 {
     if (!t) {
         return NULL;
     }
-    su_decoder_t *d = heap_caps_calloc(1, sizeof(*d), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    ru_decoder_t *d = heap_caps_calloc(1, sizeof(*d), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (!d) {
         return NULL;
     }
@@ -275,13 +275,13 @@ su_decoder_t *su_decoder_create(const su_timing_t *t, su_byte_cb_t cb, void *ctx
     return d;
 }
 
-void su_decoder_reset(su_decoder_t *d)
+void ru_decoder_reset(ru_decoder_t *d)
 {
     if (!d) {
         return;
     }
-    su_timing_t t = d->t;
-    su_byte_cb_t cb = d->cb;
+    ru_timing_t t = d->t;
+    ru_byte_cb_t cb = d->cb;
     void *ctx = d->ctx;
     memset(d, 0, sizeof(*d));
     d->t = t;
@@ -290,7 +290,7 @@ void su_decoder_reset(su_decoder_t *d)
     d->run_level = -1;
 }
 
-void su_decoder_feed(su_decoder_t *d, const rmt_symbol_word_t *syms, size_t n)
+void ru_decoder_feed(ru_decoder_t *d, const rmt_symbol_word_t *syms, size_t n)
 {
     if (!d || !syms) {
         return;
@@ -301,7 +301,7 @@ void su_decoder_feed(su_decoder_t *d, const rmt_symbol_word_t *syms, size_t n)
     }
 }
 
-void su_decoder_destroy(su_decoder_t *d)
+void ru_decoder_destroy(ru_decoder_t *d)
 {
     heap_caps_free(d);
 }

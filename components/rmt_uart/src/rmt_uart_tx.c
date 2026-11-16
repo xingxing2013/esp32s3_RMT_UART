@@ -1,17 +1,17 @@
-#include "soft_uart_tx.h"
+#include "rmt_uart_tx.h"
 
 #include <string.h>
 
 #include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
-#include "soft_uart_internal.h"
+#include "rmt_uart_internal.h"
 
-static const char *TAG = "su_tx";
+static const char *TAG = "ru_tx";
 
-static void su_tx_task(void *arg)
+static void ru_tx_task(void *arg)
 {
-    struct rmt_soft_uart_s *u = arg;
+    struct rmt_uart_s *u = arg;
     const rmt_transmit_config_t tcfg = {
         .loop_count = 0,
         .flags = {
@@ -22,7 +22,7 @@ static void su_tx_task(void *arg)
 
     for (;;) {
         size_t got = xStreamBufferReceive(u->tx_sb, u->tx_bytes,
-                                          SU_TX_CHUNK_BYTES, portMAX_DELAY);
+                                          ru_TX_CHUNK_BYTES, portMAX_DELAY);
         if (u->closing) {
             break;
         }
@@ -30,8 +30,8 @@ static void su_tx_task(void *arg)
             continue;
         }
 
-        size_t words = su_encode(u->tx_bytes, got, &u->timing, u->tx_syms,
-                                (size_t)SU_TX_CHUNK_BYTES * 5u);
+        size_t words = ru_encode(u->tx_bytes, got, &u->timing, u->tx_syms,
+                                (size_t)ru_TX_CHUNK_BYTES * 5u);
         if (words == 0) {
             continue;
         }
@@ -45,7 +45,7 @@ static void su_tx_task(void *arg)
         }
 
         /* 一个 chunk 的空中时间 = 64 字节 × 10 bit，按实际波特率放大 2 倍再加余量 */
-        uint32_t chunk_ms = (uint32_t)((uint64_t)SU_TX_CHUNK_BYTES * 10ull * 1000ull /
+        uint32_t chunk_ms = (uint32_t)((uint64_t)ru_TX_CHUNK_BYTES * 10ull * 1000ull /
                                        u->cfg.baud);
         int wait_ms = (int)(chunk_ms * 2u + 200u);
         if (wait_ms < 500) {
@@ -67,13 +67,13 @@ static void su_tx_task(void *arg)
     vTaskDelete(NULL);
 }
 
-esp_err_t su_tx_create(struct rmt_soft_uart_s *u)
+esp_err_t ru_tx_create(struct rmt_uart_s *u)
 {
     rmt_tx_channel_config_t cfg = {
         .gpio_num = (gpio_num_t)u->cfg.tx_gpio,
         .clk_src = RMT_CLK_SRC_DEFAULT,
         .resolution_hz = u->resolution_hz,
-        .mem_block_symbols = SU_MEM_BLOCK_SYMS,
+        .mem_block_symbols = ru_MEM_BLOCK_SYMS,
         .trans_queue_depth = 4,
         .intr_priority = 3,
         .flags = {
@@ -89,8 +89,8 @@ esp_err_t su_tx_create(struct rmt_soft_uart_s *u)
     ESP_RETURN_ON_ERROR(rmt_new_copy_encoder(&enc_cfg, &u->encoder), TAG, "new encoder");
 
     u->tx_sb = xStreamBufferCreate(u->cfg.tx_buffer_bytes, 1);
-    u->tx_bytes = heap_caps_malloc(SU_TX_CHUNK_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    u->tx_syms = heap_caps_malloc((size_t)SU_TX_CHUNK_BYTES * 5u * sizeof(rmt_symbol_word_t),
+    u->tx_bytes = heap_caps_malloc(ru_TX_CHUNK_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    u->tx_syms = heap_caps_malloc((size_t)ru_TX_CHUNK_BYTES * 5u * sizeof(rmt_symbol_word_t),
                                   MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (!u->tx_sb || !u->tx_bytes || !u->tx_syms) {
         return ESP_ERR_NO_MEM;
@@ -116,14 +116,14 @@ esp_err_t su_tx_create(struct rmt_soft_uart_s *u)
                         TAG, "idle prime");
     rmt_tx_wait_all_done(u->tx_ch, 100);
 
-    if (xTaskCreate(su_tx_task, "su_tx", SU_TX_STACK, u, SU_TX_PRIO, &u->tx_task) != pdPASS) {
+    if (xTaskCreate(ru_tx_task, "ru_tx", ru_TX_STACK, u, ru_TX_PRIO, &u->tx_task) != pdPASS) {
         u->tx_task = NULL;
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;
 }
 
-void su_tx_destroy(struct rmt_soft_uart_s *u)
+void ru_tx_destroy(struct rmt_uart_s *u)
 {
     if (u->tx_ch) {
         rmt_disable(u->tx_ch);

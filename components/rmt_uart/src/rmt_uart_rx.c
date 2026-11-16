@@ -1,4 +1,4 @@
-#include "soft_uart_rx.h"
+#include "rmt_uart_rx.h"
 
 #include <string.h>
 
@@ -6,13 +6,13 @@
 #include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
-#include "soft_uart_internal.h"
+#include "rmt_uart_internal.h"
 
-static const char *TAG = "su_rx";
+static const char *TAG = "ru_rx";
 
-static void su_decoder_sink(void *ctx, uint8_t byte, su_rx_flags_t flags)
+static void ru_decoder_sink(void *ctx, uint8_t byte, ru_rx_flags_t flags)
 {
-    struct rmt_soft_uart_s *u = ctx;
+    struct rmt_uart_s *u = ctx;
     if (flags.break_error) {
         u->stats.break_errors++;
         return;
@@ -27,19 +27,19 @@ static void su_decoder_sink(void *ctx, uint8_t byte, su_rx_flags_t flags)
     }
 }
 
-static bool IRAM_ATTR su_rx_done_cb(rmt_channel_handle_t channel,
+static bool IRAM_ATTR ru_rx_done_cb(rmt_channel_handle_t channel,
                                     const rmt_rx_done_event_data_t *edata,
                                     void *user_ctx)
 {
     (void)channel;
-    struct rmt_soft_uart_s *u = user_ctx;
+    struct rmt_uart_s *u = user_ctx;
     BaseType_t woken = pdFALSE;
 
     if (u->closing) {
         return false;
     }
 
-    size_t pushed = su_symbol_ring_push_from_isr(u->ring, edata->received_symbols,
+    size_t pushed = ru_rmt_uart_ring_push_from_isr(u->ring, edata->received_symbols,
                                                  edata->num_symbols);
     if (pushed < edata->num_symbols) {
         __atomic_fetch_add(&u->stats.rx_overflow, 1, __ATOMIC_RELAXED);
@@ -53,7 +53,7 @@ static bool IRAM_ATTR su_rx_done_cb(rmt_channel_handle_t channel,
             .level1 = 1,
             .duration1 = 0,
         };
-        if (su_symbol_ring_push_from_isr(u->ring, &idle, 1) != 1) {
+        if (ru_rmt_uart_ring_push_from_isr(u->ring, &idle, 1) != 1) {
             __atomic_fetch_add(&u->stats.rx_overflow, 1, __ATOMIC_RELAXED);
         }
         u->rx_need_rearm = true;
@@ -64,9 +64,9 @@ static bool IRAM_ATTR su_rx_done_cb(rmt_channel_handle_t channel,
     return woken == pdTRUE;
 }
 
-static void su_rx_task(void *arg)
+static void ru_rx_task(void *arg)
 {
-    struct rmt_soft_uart_s *u = arg;
+    struct rmt_uart_s *u = arg;
     rmt_symbol_word_t batch[32];
 
     for (;;) {
@@ -86,7 +86,7 @@ static void su_rx_task(void *arg)
                 },
             };
             esp_err_t err = rmt_receive(u->rx_ch, u->rx_buf,
-                                        (size_t)SU_RX_USER_SYMBOLS * sizeof(rmt_symbol_word_t),
+                                        (size_t)ru_RX_USER_SYMBOLS * sizeof(rmt_symbol_word_t),
                                         &rcfg);
             if (err == ESP_OK) {
                 u->stats.rx_restarts++;
@@ -97,8 +97,8 @@ static void su_rx_task(void *arg)
         }
 
         size_t n;
-        while (!u->closing && (n = su_symbol_ring_pop(u->ring, batch, 32)) > 0) {
-            su_decoder_feed(u->dec, batch, n);
+        while (!u->closing && (n = ru_rmt_uart_ring_pop(u->ring, batch, 32)) > 0) {
+            ru_decoder_feed(u->dec, batch, n);
         }
     }
 
@@ -106,13 +106,13 @@ static void su_rx_task(void *arg)
     vTaskDelete(NULL);
 }
 
-esp_err_t su_rx_create(struct rmt_soft_uart_s *u)
+esp_err_t ru_rx_create(struct rmt_uart_s *u)
 {
     rmt_rx_channel_config_t cfg = {
         .gpio_num = (gpio_num_t)u->cfg.rx_gpio,
         .clk_src = RMT_CLK_SRC_DEFAULT,
         .resolution_hz = u->resolution_hz,
-        .mem_block_symbols = SU_MEM_BLOCK_SYMS,
+        .mem_block_symbols = ru_MEM_BLOCK_SYMS,
         .intr_priority = 3,
         .flags = {
             .invert_in = u->cfg.invert,
@@ -122,23 +122,23 @@ esp_err_t su_rx_create(struct rmt_soft_uart_s *u)
     };
     ESP_RETURN_ON_ERROR(rmt_new_rx_channel(&cfg, &u->rx_ch), TAG, "new rx channel");
 
-    u->rx_buf = heap_caps_malloc((size_t)SU_RX_USER_SYMBOLS * sizeof(rmt_symbol_word_t),
+    u->rx_buf = heap_caps_malloc((size_t)ru_RX_USER_SYMBOLS * sizeof(rmt_symbol_word_t),
                                  MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    u->ring = su_symbol_ring_create(SU_RING_SYMBOLS);
-    u->dec = su_decoder_create(&u->timing, su_decoder_sink, u);
+    u->ring = ru_rmt_uart_ring_create(ru_RING_SYMBOLS);
+    u->dec = ru_decoder_create(&u->timing, ru_decoder_sink, u);
     u->rx_sb = xStreamBufferCreate(u->cfg.rx_buffer_bytes, 1);
     if (!u->rx_buf || !u->ring || !u->dec || !u->rx_sb) {
         return ESP_ERR_NO_MEM;
     }
 
     rmt_rx_event_callbacks_t cbs = {
-        .on_recv_done = su_rx_done_cb,
+        .on_recv_done = ru_rx_done_cb,
     };
     ESP_RETURN_ON_ERROR(rmt_rx_register_event_callbacks(u->rx_ch, &cbs, u),
                         TAG, "register rx callback");
     ESP_RETURN_ON_ERROR(rmt_enable(u->rx_ch), TAG, "enable rx channel");
 
-    if (xTaskCreate(su_rx_task, "su_rx", SU_RX_STACK, u, SU_RX_PRIO, &u->rx_task) != pdPASS) {
+    if (xTaskCreate(ru_rx_task, "ru_rx", ru_RX_STACK, u, ru_RX_PRIO, &u->rx_task) != pdPASS) {
         u->rx_task = NULL;
         return ESP_ERR_NO_MEM;
     }
@@ -151,13 +151,13 @@ esp_err_t su_rx_create(struct rmt_soft_uart_s *u)
         },
     };
     ESP_RETURN_ON_ERROR(rmt_receive(u->rx_ch, u->rx_buf,
-                                    (size_t)SU_RX_USER_SYMBOLS * sizeof(rmt_symbol_word_t),
+                                    (size_t)ru_RX_USER_SYMBOLS * sizeof(rmt_symbol_word_t),
                                     &rcfg),
                         TAG, "arm rx");
     return ESP_OK;
 }
 
-void su_rx_destroy(struct rmt_soft_uart_s *u)
+void ru_rx_destroy(struct rmt_uart_s *u)
 {
     if (u->rx_ch && !u->rx_stopped) {
         rmt_disable(u->rx_ch);
@@ -177,11 +177,11 @@ void su_rx_destroy(struct rmt_soft_uart_s *u)
         u->rx_sb = NULL;
     }
     if (u->ring) {
-        su_symbol_ring_destroy(u->ring);
+        ru_rmt_uart_ring_destroy(u->ring);
         u->ring = NULL;
     }
     if (u->dec) {
-        su_decoder_destroy(u->dec);
+        ru_decoder_destroy(u->dec);
         u->dec = NULL;
     }
     heap_caps_free(u->rx_buf);

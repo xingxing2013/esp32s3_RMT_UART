@@ -1,6 +1,6 @@
-#include "su_tests.h"
+#include "ru_tests.h"
 
-#include "symbol_ring.h"
+#include "rmt_uart_ring.h"
 #include "unity.h"
 
 static rmt_symbol_word_t make_sym(uint32_t v)
@@ -13,20 +13,20 @@ static rmt_symbol_word_t make_sym(uint32_t v)
 
 static void test_ring_push_pop_and_wrap(void)
 {
-    su_symbol_ring_t *r = su_symbol_ring_create(8);
+    ru_rmt_uart_ring_t *r = ru_rmt_uart_ring_create(8);
     TEST_ASSERT_NOT_NULL(r);
-    TEST_ASSERT_EQUAL_UINT32(0, su_symbol_ring_count(r));
+    TEST_ASSERT_EQUAL_UINT32(0, ru_rmt_uart_ring_count(r));
 
     rmt_symbol_word_t in[8];
     for (int i = 0; i < 8; i++) {
         in[i] = make_sym((uint32_t)i);
     }
-    TEST_ASSERT_EQUAL_size_t(8, su_symbol_ring_push_from_isr(r, in, 8));
-    TEST_ASSERT_EQUAL_UINT32(8, su_symbol_ring_count(r));
-    TEST_ASSERT_EQUAL_size_t(0, su_symbol_ring_push_from_isr(r, in, 1));
+    TEST_ASSERT_EQUAL_size_t(8, ru_rmt_uart_ring_push_from_isr(r, in, 8));
+    TEST_ASSERT_EQUAL_UINT32(8, ru_rmt_uart_ring_count(r));
+    TEST_ASSERT_EQUAL_size_t(0, ru_rmt_uart_ring_push_from_isr(r, in, 1));
 
     rmt_symbol_word_t out[8] = {0};
-    TEST_ASSERT_EQUAL_size_t(5, su_symbol_ring_pop(r, out, 5));
+    TEST_ASSERT_EQUAL_size_t(5, ru_rmt_uart_ring_pop(r, out, 5));
     for (int i = 0; i < 5; i++) {
         TEST_ASSERT_EQUAL_UINT32((uint32_t)i, out[i].duration0);
     }
@@ -35,34 +35,34 @@ static void test_ring_push_pop_and_wrap(void)
     for (int i = 0; i < 5; i++) {
         more[i] = make_sym((uint32_t)(100 + i));
     }
-    TEST_ASSERT_EQUAL_size_t(5, su_symbol_ring_push_from_isr(r, more, 5));
-    TEST_ASSERT_EQUAL_UINT32(8, su_symbol_ring_count(r));
+    TEST_ASSERT_EQUAL_size_t(5, ru_rmt_uart_ring_push_from_isr(r, more, 5));
+    TEST_ASSERT_EQUAL_UINT32(8, ru_rmt_uart_ring_count(r));
 
-    TEST_ASSERT_EQUAL_size_t(8, su_symbol_ring_pop(r, out, 8));
+    TEST_ASSERT_EQUAL_size_t(8, ru_rmt_uart_ring_pop(r, out, 8));
     TEST_ASSERT_EQUAL_UINT32(5, out[0].duration0);
     TEST_ASSERT_EQUAL_UINT32(7, out[2].duration0);
     TEST_ASSERT_EQUAL_UINT32(100, out[3].duration0);
     TEST_ASSERT_EQUAL_UINT32(104, out[7].duration0);
-    TEST_ASSERT_EQUAL_UINT32(0, su_symbol_ring_count(r));
+    TEST_ASSERT_EQUAL_UINT32(0, ru_rmt_uart_ring_count(r));
 
-    su_symbol_ring_destroy(r);
+    ru_rmt_uart_ring_destroy(r);
 }
 
 static void test_ring_reset(void)
 {
-    su_symbol_ring_t *r = su_symbol_ring_create(4);
+    ru_rmt_uart_ring_t *r = ru_rmt_uart_ring_create(4);
     TEST_ASSERT_NOT_NULL(r);
     rmt_symbol_word_t s = make_sym(1);
-    TEST_ASSERT_EQUAL_size_t(1, su_symbol_ring_push_from_isr(r, &s, 1));
-    TEST_ASSERT_EQUAL_UINT32(1, su_symbol_ring_count(r));
-    su_symbol_ring_reset(r);
-    TEST_ASSERT_EQUAL_UINT32(0, su_symbol_ring_count(r));
-    su_symbol_ring_destroy(r);
+    TEST_ASSERT_EQUAL_size_t(1, ru_rmt_uart_ring_push_from_isr(r, &s, 1));
+    TEST_ASSERT_EQUAL_UINT32(1, ru_rmt_uart_ring_count(r));
+    ru_rmt_uart_ring_reset(r);
+    TEST_ASSERT_EQUAL_UINT32(0, ru_rmt_uart_ring_count(r));
+    ru_rmt_uart_ring_destroy(r);
 }
 
 static void test_ring_wrap_split(void)
 {
-    su_symbol_ring_t *r = su_symbol_ring_create(8);
+    ru_rmt_uart_ring_t *r = ru_rmt_uart_ring_create(8);
     TEST_ASSERT_NOT_NULL(r);
 
     /* 先填 6 个，再取 1 个，使 head 停在 6；随后 push 3 个必然跨越缓冲末尾 */
@@ -70,23 +70,23 @@ static void test_ring_wrap_split(void)
     for (int i = 0; i < 9; i++) {
         in[i] = make_sym((uint32_t)(i + 1));
     }
-    TEST_ASSERT_EQUAL_size_t(6, su_symbol_ring_push_from_isr(r, in, 6));
+    TEST_ASSERT_EQUAL_size_t(6, ru_rmt_uart_ring_push_from_isr(r, in, 6));
     rmt_symbol_word_t out[8] = {0};
-    TEST_ASSERT_EQUAL_size_t(1, su_symbol_ring_pop(r, out, 1));
+    TEST_ASSERT_EQUAL_size_t(1, ru_rmt_uart_ring_pop(r, out, 1));
     TEST_ASSERT_EQUAL_UINT32(1, out[0].duration0);
-    TEST_ASSERT_EQUAL_size_t(3, su_symbol_ring_push_from_isr(r, &in[6], 3));
-    TEST_ASSERT_EQUAL_UINT32(8, su_symbol_ring_count(r));
+    TEST_ASSERT_EQUAL_size_t(3, ru_rmt_uart_ring_push_from_isr(r, &in[6], 3));
+    TEST_ASSERT_EQUAL_UINT32(8, ru_rmt_uart_ring_count(r));
 
-    TEST_ASSERT_EQUAL_size_t(8, su_symbol_ring_pop(r, out, 8));
+    TEST_ASSERT_EQUAL_size_t(8, ru_rmt_uart_ring_pop(r, out, 8));
     for (int i = 0; i < 7; i++) {
         TEST_ASSERT_EQUAL_UINT32((uint32_t)(i + 2), out[i].duration0);
     }
     TEST_ASSERT_EQUAL_UINT32(9, out[7].duration0);
 
-    su_symbol_ring_destroy(r);
+    ru_rmt_uart_ring_destroy(r);
 }
 
-int su_test_ring_run(void)
+int ru_test_ring_run(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_ring_push_pop_and_wrap);

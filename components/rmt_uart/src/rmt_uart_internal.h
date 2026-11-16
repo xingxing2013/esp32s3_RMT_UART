@@ -10,25 +10,25 @@
 #include "freertos/semphr.h"
 #include "freertos/stream_buffer.h"
 #include "freertos/task.h"
-#include "rmt_soft_uart.h"
-#include "soft_uart_codec.h"
-#include "symbol_ring.h"
+#include "rmt_uart.h"
+#include "rmt_uart_frame.h"
+#include "rmt_uart_ring.h"
 
-#define SU_TX_CHUNK_BYTES   64
-#define SU_RX_USER_SYMBOLS  96
-#define SU_RING_SYMBOLS     1024
-#define SU_MEM_BLOCK_SYMS   48
-#define SU_RX_STACK         4096
-#define SU_TX_STACK         3584
-#define SU_RX_PRIO          12
-#define SU_TX_PRIO          10
-#define SU_DEFAULT_RX_BYTES 1024
-#define SU_DEFAULT_TX_BYTES 512
+#define ru_TX_CHUNK_BYTES   64
+#define ru_RX_USER_SYMBOLS  96
+#define ru_RING_SYMBOLS     1024
+#define ru_MEM_BLOCK_SYMS   48
+#define ru_RX_STACK         4096
+#define ru_TX_STACK         3584
+#define ru_RX_PRIO          12
+#define ru_TX_PRIO          10
+#define ru_DEFAULT_RX_BYTES 1024
+#define ru_DEFAULT_TX_BYTES 512
 
-struct rmt_soft_uart_s {
-    rmt_soft_uart_config_t cfg;
+struct rmt_uart_s {
+    rmt_uart_config_t cfg;
     uint32_t resolution_hz;
-    su_timing_t timing;
+    ru_timing_t timing;
 
     rmt_channel_handle_t tx_ch;
     rmt_channel_handle_t rx_ch;
@@ -36,8 +36,8 @@ struct rmt_soft_uart_s {
 
     StreamBufferHandle_t tx_sb;
     StreamBufferHandle_t rx_sb;
-    su_symbol_ring_t *ring;
-    su_decoder_t *dec;
+    ru_rmt_uart_ring_t *ring;
+    ru_decoder_t *dec;
 
     TaskHandle_t tx_task;
     TaskHandle_t rx_task;
@@ -57,5 +57,5 @@ struct rmt_soft_uart_s {
     volatile bool rx_stopped;
 
     bool valid;
-    rmt_soft_uart_stats_t stats;
+    rmt_uart_stats_t stats;
 };

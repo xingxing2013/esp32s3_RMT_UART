@@ -1,4 +1,4 @@
-#include "su_diag.h"
+#include "ru_diag.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -10,24 +10,24 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "rmt_soft_uart.h"
+#include "rmt_uart.h"
 #include "sdkconfig.h"
 
-static const char *TAG = "su_diag";
+static const char *TAG = "ru_diag";
 
 #define DIAG_CHANNELS 3
 #define DIAG_BLOCK    256
 
 static const int s_tx_gpio[DIAG_CHANNELS] = {
-    CONFIG_RMT_SOFT_UART_CH0_TX_GPIO,
-    CONFIG_RMT_SOFT_UART_CH1_TX_GPIO,
-    CONFIG_RMT_SOFT_UART_CH2_TX_GPIO,
+    CONFIG_RMT_UART_CH0_TX_GPIO,
+    CONFIG_RMT_UART_CH1_TX_GPIO,
+    CONFIG_RMT_UART_CH2_TX_GPIO,
 };
 
 static const int s_rx_gpio[DIAG_CHANNELS] = {
-    CONFIG_RMT_SOFT_UART_CH0_RX_GPIO,
-    CONFIG_RMT_SOFT_UART_CH1_RX_GPIO,
-    CONFIG_RMT_SOFT_UART_CH2_RX_GPIO,
+    CONFIG_RMT_UART_CH0_RX_GPIO,
+    CONFIG_RMT_UART_CH1_RX_GPIO,
+    CONFIG_RMT_UART_CH2_RX_GPIO,
 };
 
 static volatile uint32_t s_irq_count;
@@ -37,7 +37,7 @@ static bool diag_alarm_cb(gptimer_handle_t timer,
                                    const gptimer_alarm_event_data_t *edata,
                                    void *user_ctx);
 
-void su_diag_irq_start(uint32_t irq_khz)
+void ru_diag_irq_start(uint32_t irq_khz)
 {
     if (irq_khz == 0 || s_timer) {
         return;
@@ -63,7 +63,7 @@ void su_diag_irq_start(uint32_t irq_khz)
     s_irq_count = 0;
 }
 
-void su_diag_irq_stop(void)
+void ru_diag_irq_stop(void)
 {
     if (!s_timer) {
         return;
@@ -89,7 +89,7 @@ static bool IRAM_ATTR diag_alarm_cb(gptimer_handle_t timer,
 }
 
 typedef struct {
-    rmt_soft_uart_handle_t handle;
+    rmt_uart_handle_t handle;
     volatile bool stop;
     volatile uint32_t written;
 } producer_t;
@@ -105,7 +105,7 @@ static void producer_task(void *arg)
     while (!p->stop) {
         size_t off = 0;
         while (off < sizeof(block) && !p->stop) {
-            int n = rmt_soft_uart_write(p->handle, block + off, sizeof(block) - off,
+            int n = rmt_uart_write(p->handle, block + off, sizeof(block) - off,
                                         pdMS_TO_TICKS(50));
             if (n > 0) {
                 p->written += (uint32_t)n;
@@ -160,9 +160,9 @@ static void dump_task_stats(void)
     ESP_LOGI(TAG, "task CPU (cumulative since boot):\n%s", buf);
 }
 
-void su_diag_run(uint32_t seconds, uint32_t baud, uint32_t irq_khz, uint32_t hog_percent)
+void ru_diag_run(uint32_t seconds, uint32_t baud, uint32_t irq_khz, uint32_t hog_percent)
 {
-    rmt_soft_uart_handle_t handles[DIAG_CHANNELS] = {0};
+    rmt_uart_handle_t handles[DIAG_CHANNELS] = {0};
     producer_t prod[DIAG_CHANNELS] = {0};
     static uint8_t rx[DIAG_BLOCK];
 
@@ -170,14 +170,14 @@ void su_diag_run(uint32_t seconds, uint32_t baud, uint32_t irq_khz, uint32_t hog
              baud, (unsigned)seconds, irq_khz, hog_percent);
 
     for (int i = 0; i < DIAG_CHANNELS; i++) {
-        rmt_soft_uart_config_t cfg = {
+        rmt_uart_config_t cfg = {
             .tx_gpio = s_tx_gpio[i],
             .rx_gpio = s_rx_gpio[i],
             .baud = baud,
             .rx_buffer_bytes = 4096,
             .tx_buffer_bytes = 2048,
         };
-        esp_err_t err = rmt_soft_uart_new(&cfg, &handles[i]);
+        esp_err_t err = rmt_uart_new(&cfg, &handles[i]);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "ch%d new failed: %s", i, esp_err_to_name(err));
             return;
@@ -186,7 +186,7 @@ void su_diag_run(uint32_t seconds, uint32_t baud, uint32_t irq_khz, uint32_t hog
 
     gptimer_handle_t timer = NULL;
     if (irq_khz > 0) {
-        su_diag_irq_start(irq_khz);
+        ru_diag_irq_start(irq_khz);
         timer = s_timer;
     }
 
@@ -213,7 +213,7 @@ void su_diag_run(uint32_t seconds, uint32_t baud, uint32_t irq_khz, uint32_t hog
 
     while (esp_timer_get_time() < t_end) {
         for (int i = 0; i < DIAG_CHANNELS; i++) {
-            int n = rmt_soft_uart_read(handles[i], rx, sizeof(rx), pdMS_TO_TICKS(20));
+            int n = rmt_uart_read(handles[i], rx, sizeof(rx), pdMS_TO_TICKS(20));
             if (n > 0) {
                 read_bytes += (uint32_t)n;
             }
@@ -229,7 +229,7 @@ void su_diag_run(uint32_t seconds, uint32_t baud, uint32_t irq_khz, uint32_t hog
     for (int i = 0; i < DIAG_CHANNELS; i++) {
         int n;
         do {
-            n = rmt_soft_uart_read(handles[i], rx, sizeof(rx), pdMS_TO_TICKS(50));
+            n = rmt_uart_read(handles[i], rx, sizeof(rx), pdMS_TO_TICKS(50));
             if (n > 0) {
                 read_bytes += (uint32_t)n;
             }
@@ -242,7 +242,7 @@ void su_diag_run(uint32_t seconds, uint32_t baud, uint32_t irq_khz, uint32_t hog
     read_idle(&idle1, &idle_cnt1);
 
     if (timer) {
-        su_diag_irq_stop();
+        ru_diag_irq_stop();
     }
     if (hog_percent > 0) {
         hog.stop = true;
@@ -252,8 +252,8 @@ void su_diag_run(uint32_t seconds, uint32_t baud, uint32_t irq_khz, uint32_t hog
     uint32_t txb = 0, rxb = 0, fe = 0, ovf = 0, restarts = 0, txerr = 0, rearm_err = 0;
     for (int i = 0; i < DIAG_CHANNELS; i++) {
         txb += prod[i].written;
-        rmt_soft_uart_stats_t st = {0};
-        rmt_soft_uart_get_stats(handles[i], &st);
+        rmt_uart_stats_t st = {0};
+        rmt_uart_get_stats(handles[i], &st);
         rxb += st.rx_bytes;
         fe += st.framing_errors;
         ovf += st.rx_overflow;
@@ -282,7 +282,7 @@ void su_diag_run(uint32_t seconds, uint32_t baud, uint32_t irq_khz, uint32_t hog
     dump_task_stats();
 
     for (int i = 0; i < DIAG_CHANNELS; i++) {
-        rmt_soft_uart_del(handles[i]);
+        rmt_uart_del(handles[i]);
     }
     ESP_LOGI(TAG, "done");
 }
