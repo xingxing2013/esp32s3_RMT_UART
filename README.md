@@ -31,7 +31,8 @@ dependencies:
     path: ../components/rmt_uart     # 或 registry 地址
 ```
 
-完整示例见 `examples/rmt_uart_basic/`。
+完整示例见 `components/rmt_uart/examples/`（basic_echo / three_ports / frame_formats），
+组件级详细说明见 `components/rmt_uart/README.md`。
 
 ## 快速开始
 
@@ -241,8 +242,13 @@ IDF 5.3.2 的 `esp_driver_rmt` 在「partial RX + 乒乓回绕 + 空闲结束事
 
 ```
 components/rmt_uart/
+  README.md              组件级详细说明（引用方式、API、开发说明）
   include/rmt_uart.h     公共 API
   src/                   帧编解码、ring、TX/RX、核心
   test/                  板端 Unity
-  examples/rmt_uart_basic 最小示例
+  examples/              三个可独立编译的例程
+    basic_echo/          单路 8N1 同步回声
+    three_ports/         三路不同格式，同步/异步/回调
+    frame_formats/       5-8 数据位、校验、停止位配置
+components/esp_driver_rmt/  补丁版 IDF 驱动（持续流必需）
 ```
