@@ -1,0 +1,7 @@
+menu "RMT Soft UART"
+
+config RMT_SOFT_UART_RUN_TESTS
+    bool "Run on-target unit tests at boot"
+    default n
+
+endmenu
