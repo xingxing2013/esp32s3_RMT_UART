@@ -12,9 +12,9 @@
 
 | 通道 | TX | RX |
 |---|---|---|
-| ch0 | GPIO4 | GPIO5 |
-| ch1 | GPIO6 | GPIO7 |
-| ch2 | GPIO8 | GPIO9 |
+| ch0 | GPIO42 | GPIO41 |
+| ch1 | GPIO40 | GPIO39 |
+| ch2 | GPIO38 | GPIO37 |
 
 引脚可在 `idf.py menuconfig -> Component config -> RMT Soft UART` 修改。
 `internal_loopback = true` 时 TX 与 RX 用同一个引脚，不需要外部接线。

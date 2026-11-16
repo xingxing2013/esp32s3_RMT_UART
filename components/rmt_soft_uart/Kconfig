@@ -15,22 +15,22 @@ config RMT_SOFT_UART_SELFTEST
 
 config RMT_SOFT_UART_CH0_TX_GPIO
     int "CH0 TX GPIO"
-    default 4
+    default 42
 config RMT_SOFT_UART_CH0_RX_GPIO
     int "CH0 RX GPIO"
-    default 5
+    default 41
 config RMT_SOFT_UART_CH1_TX_GPIO
     int "CH1 TX GPIO"
-    default 6
+    default 40
 config RMT_SOFT_UART_CH1_RX_GPIO
     int "CH1 RX GPIO"
-    default 7
+    default 39
 config RMT_SOFT_UART_CH2_TX_GPIO
     int "CH2 TX GPIO"
-    default 8
+    default 38
 config RMT_SOFT_UART_CH2_RX_GPIO
     int "CH2 RX GPIO"
-    default 9
+    default 37
 config RMT_SOFT_UART_DEMO_BAUD
     int "Demo baud rate"
     default 115200
