@@ -3,5 +3,36 @@ menu "RMT Soft UART"
 config RMT_SOFT_UART_RUN_TESTS
     bool "Run on-target unit tests at boot"
     default n
+    help
+        上电先跑 codec / ring 的 Unity 用例。
+
+config RMT_SOFT_UART_SELFTEST
+    bool "Run 3-channel loopback selftest at boot"
+    default n
+    depends on !RMT_SOFT_UART_RUN_TESTS
+    help
+        上电跑 3 路回环自测，结果打印到控制台。
+
+config RMT_SOFT_UART_CH0_TX_GPIO
+    int "CH0 TX GPIO"
+    default 4
+config RMT_SOFT_UART_CH0_RX_GPIO
+    int "CH0 RX GPIO"
+    default 5
+config RMT_SOFT_UART_CH1_TX_GPIO
+    int "CH1 TX GPIO"
+    default 6
+config RMT_SOFT_UART_CH1_RX_GPIO
+    int "CH1 RX GPIO"
+    default 7
+config RMT_SOFT_UART_CH2_TX_GPIO
+    int "CH2 TX GPIO"
+    default 8
+config RMT_SOFT_UART_CH2_RX_GPIO
+    int "CH2 RX GPIO"
+    default 9
+config RMT_SOFT_UART_DEMO_BAUD
+    int "Demo baud rate"
+    default 115200
 
 endmenu
