@@ -1,3 +1,4 @@
+#include <inttypes.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -26,12 +27,17 @@ void app_main(void)
     rmt_soft_uart_handle_t u = NULL;
     ESP_ERROR_CHECK(rmt_soft_uart_new(&cfg, &u));
 
-    const uint8_t txbuf[] = {0x55, 0x00, 0xFF, 0x7E, 0x31, 0x32, 0x33};
-    int sent = rmt_soft_uart_write(u, txbuf, sizeof(txbuf), pdMS_TO_TICKS(100));
-    uint8_t rxbuf[sizeof(txbuf)] = {0};
-    int got = rmt_soft_uart_read(u, rxbuf, sizeof(rxbuf), pdMS_TO_TICKS(1000));
-    ESP_LOGI(TAG, "sent=%d got=%d match=%d", sent, got,
-             (got == (int)sizeof(txbuf)) && (memcmp(txbuf, rxbuf, sizeof(txbuf)) == 0));
+    static const uint32_t seq[] = {115200, 9600, 115200};
+    for (size_t i = 0; i < sizeof(seq) / sizeof(seq[0]); i++) {
+        ESP_ERROR_CHECK(rmt_soft_uart_set_baud(u, seq[i]));
+        vTaskDelay(pdMS_TO_TICKS(20));
+        const uint8_t probe[] = {'O', 'K'};
+        int sent = rmt_soft_uart_write(u, probe, sizeof(probe), pdMS_TO_TICKS(100));
+        uint8_t rxbuf[2] = {0};
+        int got = rmt_soft_uart_read(u, rxbuf, sizeof(rxbuf), pdMS_TO_TICKS(1000));
+        ESP_LOGI(TAG, "baud=%" PRIu32 " sent=%d got=%d match=%d", seq[i], sent, got,
+                 (got == 2) && (memcmp(probe, rxbuf, 2) == 0));
+    }
 
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(1000));

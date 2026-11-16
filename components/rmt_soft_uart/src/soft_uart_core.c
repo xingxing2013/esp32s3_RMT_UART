@@ -1,5 +1,6 @@
 #include "rmt_soft_uart.h"
 
+#include <inttypes.h>
 #include <string.h>
 
 #include "driver/gpio.h"
@@ -151,8 +152,17 @@ esp_err_t rmt_soft_uart_set_baud(rmt_soft_uart_handle_t u, uint32_t baud)
     xSemaphoreTake(u->api_lock, portMAX_DELAY);
     su_stop_workers(u);
     su_teardown(u);
+
+    uint32_t old_baud = u->cfg.baud;
     u->cfg.baud = baud;
     esp_err_t err = su_setup(u);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "set_baud(%" PRIu32 ") failed: %s", baud, esp_err_to_name(err));
+        u->cfg.baud = old_baud;
+        if (su_setup(u) != ESP_OK) {
+            ESP_LOGE(TAG, "restore baud %" PRIu32 " failed, handle unusable", old_baud);
+        }
+    }
     xSemaphoreGive(u->api_lock);
     return err;
 }
@@ -177,8 +187,11 @@ int rmt_soft_uart_read(rmt_soft_uart_handle_t u, void *buf, size_t len,
 
 esp_err_t rmt_soft_uart_flush_rx(rmt_soft_uart_handle_t u)
 {
-    (void)u;
-    return ESP_ERR_NOT_SUPPORTED; /* 任务 7 实现 */
+    if (!u || !u->rx_sb) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    xStreamBufferReset(u->rx_sb);
+    return ESP_OK;
 }
 
 esp_err_t rmt_soft_uart_get_stats(rmt_soft_uart_handle_t u,
