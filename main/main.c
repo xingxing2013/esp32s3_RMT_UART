@@ -6,6 +6,7 @@
 #include "freertos/task.h"
 #include "rmt_soft_uart.h"
 #include "sdkconfig.h"
+#include "su_diag.h"
 #include "su_selftest.h"
 #include "su_tests.h"
 
@@ -57,6 +58,18 @@ static void stats_task(void *arg)
 
 void app_main(void)
 {
+#if CONFIG_SU_DIAG_ENABLE
+#if CONFIG_SU_DIAG_IRQ_ONLY
+    su_diag_irq_start(CONFIG_SU_DIAG_IRQ_KHZ);
+#else
+    su_diag_run(CONFIG_SU_DIAG_SECONDS, CONFIG_SU_DIAG_BAUD,
+                CONFIG_SU_DIAG_IRQ_KHZ, CONFIG_SU_DIAG_HOG_PERCENT);
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(5000));
+    }
+#endif
+#endif
+
 #if CONFIG_RMT_SOFT_UART_RUN_TESTS
     int codec_failures = su_test_codec_run();
     int ring_failures = su_test_ring_run();

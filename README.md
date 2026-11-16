@@ -68,6 +68,47 @@ I (xxx) su_selftest: selftest summary: 5/5 passed
 
 拔掉任意一路短接线后对应用例必须变成 FAIL —— 这是验证自测本身有效的反向检查。
 
+## 诊断与压测（可选）
+
+`idf.py menuconfig -> Component config -> RMT Soft UART`：
+
+- `Run 3-channel load test at boot`：3 路持续灌数据 + 独立收，统计真实丢字节与 CPU 占用
+  - `Load test baud rate`：默认 1 000 000
+  - `Extra GPTimer interrupt rate (kHz)`：叠加高频硬件中断（0 = 关闭）
+  - `Extra CPU hog duty cycle (%)`：叠加忙等任务（0 = 关闭）
+- `Only start the extra interrupt, skip load test`：只开干扰中断，配合回环自测观察影响
+
+CPU 统计依赖 `CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS`（打开压测时自动选中）。
+
+### 压测结果（2026-11-16，ESP32-S3 rev v0.2，160 MHz）
+
+**1 Mbaud，3 路并发，1 KB 突发（回环自测）**
+
+| 场景 | 结果 |
+|---|---|
+| 无额外中断 | **5/5 PASS**，每路 1024/1024 |
+| 叠加 20 kHz GPTimer 中断 | **4/5**，ch1 收到 988、ch2 收到 992 字节（fe=0/1） |
+
+**460800，3 路持续收发 10 s（每轮约 0.9 MB）**
+
+| 场景 | 丢字节 | 帧错误 | CPU 占用 | 吞吐 |
+|---|---|---|---|---|
+| 无额外负载 | 116（0.012%） | 133 | 85.0% | 94 KB/s |
+| +20 kHz 中断 | 296（0.032%） | 180 | 86.1% | 89 KB/s |
+| +20 kHz 中断 + 50% 忙等 | 368（0.039%） | 178 | 89.7% | 89 KB/s |
+
+**1 Mbaud 持续收发**：约数毫秒后触发 IDF 5.3.2 RMT 驱动断言
+`assert failed: rmt_isr_handle_rx_done rmt_rx.c:584 (offset >= rx_chan->mem_off)`，
+设备重启。这是驱动在「partial RX + 乒乓回绕 + 空闲结束事务」下的已知缺陷，
+**当前版本不能用于 1 M 持续流**；短突发（KB 级）正常。
+
+### 结论
+
+- 3 路并发 1 M **短突发**可用；**持续高吞吐建议 ≤460800**
+- 单帧解码的 CPU 成本明显：1 M 时每个 `su_rx` 任务约占 18% CPU，`su_tx` 约 5%
+- 额外中断会让丢字节上升 2–3 倍（仍在 0.04% 量级），但对 1 M 并发突发更敏感（约 3%）
+- 3 路 460800 持续满载时 CPU 已到 85–90%，系统接近饱和
+
 ## 限制与已知行为
 
 - 固定 8N1，无校验位 / 流控 / 数据位可配

@@ -35,4 +35,34 @@ config RMT_SOFT_UART_DEMO_BAUD
     int "Demo baud rate"
     default 115200
 
+config SU_DIAG_IRQ_ONLY
+    bool "Only start the extra interrupt, skip load test"
+    default n
+    depends on SU_DIAG_ENABLE
+
+config SU_DIAG_ENABLE
+    bool "Run 3-channel load test at boot (diagnostics)"
+    default n
+    select FREERTOS_GENERATE_RUN_TIME_STATS
+
+config SU_DIAG_SECONDS
+    int "Load test duration (seconds)"
+    default 10
+    depends on SU_DIAG_ENABLE
+
+config SU_DIAG_BAUD
+    int "Load test baud rate"
+    default 1000000
+    depends on SU_DIAG_ENABLE
+
+config SU_DIAG_IRQ_KHZ
+    int "Extra GPTimer interrupt rate (kHz, 0 = off)"
+    default 0
+    depends on SU_DIAG_ENABLE
+
+config SU_DIAG_HOG_PERCENT
+    int "Extra CPU hog duty cycle (%, 0 = off)"
+    default 0
+    depends on SU_DIAG_ENABLE
+
 endmenu
