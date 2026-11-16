@@ -655,9 +655,10 @@ static void test_decode_cycles_per_byte(void)
         static rmt_symbol_word_t merged_syms[1 + 1024 * RU_WORDS_PER_BYTE];
         size_t mw = merge_and_pack(syms, w, merged_syms, 1 + 1024 * RU_WORDS_PER_BYTE);
 
-        for (int pass = 0; pass < 2; pass++) {
+        for (int pass = 0; pass < 3; pass++) {
+            bool no_cb = (pass == 2);
             uint32_t count = 0;
-            ru_decoder_t *d = ru_decoder_create(&t, bench_sink, &count);
+            ru_decoder_t *d = ru_decoder_create(&t, no_cb ? NULL : bench_sink, &count);
             TEST_ASSERT_NOT_NULL(d);
             const rmt_symbol_word_t *feed = pass ? merged_syms : syms;
             size_t feed_words = pass ? mw : w;
@@ -667,9 +668,9 @@ static void test_decode_cycles_per_byte(void)
                 ru_decoder_feed(d, feed, feed_words);
             }
             uint32_t c1 = esp_cpu_get_cycle_count();
-            TEST_ASSERT_EQUAL_UINT32((uint32_t)rounds * sizeof(src), count);
+            if (!no_cb) TEST_ASSERT_EQUAL_UINT32((uint32_t)rounds * sizeof(src), count);
             ESP_LOGI("bench", "decode %s/%s: %.1f cycles/byte (symbols=%u)",
-                     pattern ? "0xFF" : "random", pass ? "merged" : "raw",
+                     pattern ? "0xFF" : "random", pass == 0 ? "raw" : (pass == 1 ? "merged" : "merged-nocb"),
                      (double)(c1 - c0) / ((double)rounds * (double)sizeof(src)),
                      (unsigned)feed_words);
             ru_decoder_destroy(d);

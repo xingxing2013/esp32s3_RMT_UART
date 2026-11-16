@@ -278,25 +278,35 @@ RU_INLINE void dec_frame_begin(ru_decoder_t *d, uint32_t t0)
 RU_INLINE void dec_frame_consume(ru_decoder_t *d, int level, uint32_t end)
 {
     while (d->in_frame) {
-        while (d->next_sample < d->t.sample_count && ts_before(d->next_sample_ts, end)) {
-            if (d->next_sample < d->t.data_bits) {
-                if (level) {
-                    d->data |= (uint8_t)(1u << d->next_sample);
-                    d->ones++;
-                }
-            } else if (d->t.parity_bits && d->next_sample == d->t.data_bits) {
-                d->parity_level = level != 0;
-            } else {
-                d->stop_level = level != 0;
+        /* 数据位：采样点间隔恒为 1 bit，用增量推进代替每次重算 */
+        while (d->next_sample < d->t.data_bits && ts_before(d->next_sample_ts, end)) {
+            if (level) {
+                d->data |= (uint8_t)(1u << d->next_sample);
+                d->ones++;
             }
             d->next_sample++;
-            if (d->next_sample < d->t.sample_count) {
-                d->next_sample_ts = d->frame_start + d->t.sample_off[d->next_sample];
-            }
+            d->next_sample_ts += d->t.bit_ticks;
         }
-        if (d->next_sample < d->t.sample_count) {
+        if (d->next_sample < d->t.data_bits) {
             return;
         }
+
+        /* 校验位 */
+        if (d->t.parity_bits && d->next_sample == d->t.data_bits) {
+            if (!ts_before(d->next_sample_ts, end)) {
+                return;
+            }
+            d->parity_level = level != 0;
+            d->next_sample++;
+            d->next_sample_ts += d->t.bit_ticks;
+        }
+
+        /* 停止位（最后一个采样点） */
+        if (!ts_before(d->next_sample_ts, end)) {
+            return;
+        }
+        d->stop_level = level != 0;
+        d->next_sample++;
 
         bool parity_ok = true;
         if (d->t.parity_bits) {

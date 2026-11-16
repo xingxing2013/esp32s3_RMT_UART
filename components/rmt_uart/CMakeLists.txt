@@ -12,4 +12,4 @@ idf_component_register(
 )
 
 # 解码热路径固定用 -O2，避免宿主工程用 -Og 时性能腰斩
-target_compile_options(${COMPONENT_LIB} PRIVATE -O2)
+target_compile_options(${COMPONENT_LIB} PRIVATE -O3)
