@@ -305,7 +305,8 @@ static bool run_port_limit(const ch_desc_t chs[SELFTEST_CHANNELS])
 }
 
 /* 三路同时收发 */
-static bool run_concurrent(const ch_desc_t chs[SELFTEST_CHANNELS], uint32_t baud, size_t len)
+static bool run_concurrent(const ch_desc_t chs[SELFTEST_CHANNELS], uint32_t baud,
+                          const uint32_t *bauds, size_t len)
 {
     rmt_uart_handle_t handles[SELFTEST_CHANNELS] = {0};
     uint8_t *tx[SELFTEST_CHANNELS] = {0};
@@ -313,10 +314,11 @@ static bool run_concurrent(const ch_desc_t chs[SELFTEST_CHANNELS], uint32_t baud
     bool ok = false;
 
     for (int i = 0; i < SELFTEST_CHANNELS; i++) {
+        uint32_t b = bauds ? bauds[i] : baud;
         rmt_uart_config_t cfg = {
             .tx_gpio = chs[i].tx_gpio,
             .rx_gpio = chs[i].rx_gpio,
-            .baud = baud,
+            .baud = b,
             .rx_buffer_bytes = 4096,
             .tx_buffer_bytes = 2048,
         };
@@ -369,7 +371,7 @@ static bool run_concurrent(const ch_desc_t chs[SELFTEST_CHANNELS], uint32_t baud
         bool ch_ok = match && (st.framing_errors == 0) && (st.parity_errors == 0) &&
                      (st.rx_overflow == 0);
         ESP_LOGI(TAG, "concurrent %s @%u %s: got=%u match=%d fe=%u pe=%u ovf=%u",
-                 chs[i].name, (unsigned)baud, ch_ok ? "PASS" : "FAIL",
+                 chs[i].name, (unsigned)(bauds ? bauds[i] : baud), ch_ok ? "PASS" : "FAIL",
                  (unsigned)got[i], got[i] == len, (unsigned)st.framing_errors,
                  (unsigned)st.parity_errors, (unsigned)st.rx_overflow);
         ok = ok && ch_ok;
@@ -479,8 +481,17 @@ void ru_selftest_run(void)
         pass++;
     }
     total++;
-    if (run_concurrent(chs, baud, SELFTEST_LEN)) {
+    if (run_concurrent(chs, baud, NULL, SELFTEST_LEN)) {
         pass++;
+    }
+
+    /* 三路不同波特率并发 */
+    total++;
+    {
+        const uint32_t mixed[SELFTEST_CHANNELS] = {9600, 115200, 460800};
+        if (run_concurrent(chs, baud, mixed, 256)) {
+            pass++;
+        }
     }
     total++;
     if (run_baud_switch(baud, 9600)) {

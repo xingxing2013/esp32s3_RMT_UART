@@ -5,6 +5,7 @@
 ## 特性
 
 - 最多 **3 路**独立全双工串口，用几路初始化几路
+- **每路独立配置波特率与帧格式**（已验证 9600 / 115200 / 460800 三路并发）
 - 帧格式可配：数据位 **5–8**、校验 **无/偶/奇**、停止位 **1/1.5/2**
 - 波特率 **300–1 000 000** 运行时可配
 - **同步**（`write`/`read`）与**异步**（`write_async`/`read_async`）读写
@@ -163,11 +164,26 @@ rmt_uart_get_stats(h, &st);
 | 9600 ↔ 115200 切换 | PASS |
 | 1 Mbaud 短突发 1 KB | PASS |
 
+## DMA 说明
+
+`rmt_uart_config_t.use_dma` 可打开 RMT DMA。硬件限制（ESP32-S3 `rmt_ll.h`）：
+
+- **只有 RMT 最后一个通道（ch3）具备 DMA 能力**（`HAL_ASSERT(channel == 3)`）
+- DAC 通道在实例化时分配，所以 **3 路里最多 1 路能用 DMA**，且必须抢在别的实例之前
+- 打开后 `mem_block_symbols` 从 48 提到 512（DMA 缓冲）
+
+**对 CPU 的预期收益很小**：实测 1 Mbaud 每路 `su_rx` 约 18%、`su_tx` 约 5%，
+开销主要在解码任务的逐 symbol 采样，而不是 RMT 搬运；DMA 只省掉 ISR 里的
+72-symbol memcpy（约每 0.6 ms 一次）。持续负载下的 DMA 对比被上面的驱动断言打断，
+未能给出可信数字——需要先修驱动。
+
 ## 限制
 
-- 1 Mbaud **持续流**会触发 IDF 5.3.2 RMT 驱动断言
-  `rmt_isr_handle_rx_done rmt_rx.c:584 (offset >= rx_chan->mem_off)`；
-  短突发正常，持续高吞吐建议 ≤460800
+- **任何波特率下的持续流**都可能触发 IDF 5.3.2 RMT 驱动断言
+  `rmt_isr_handle_rx_done rmt_rx.c:584 (offset >= rx_chan->mem_off)` 并重启；
+  实测 115200、460800、1 M 的持续压测都会命中，短突发（KB 级）稳定
+- 该断言与波特率无关，是「partial RX + 乒乓回绕 + 空闲结束事务」的驱动缺陷；
+  需要持续流时必须给 IDF 打补丁或 vendor 一份修过的 `esp_driver_rmt`
 - 3 路 460800 持续满载时双核平均 CPU 约 85–90%
 - 低波特率（≤ ~62.7 k）毛刺过滤被硬件上限削弱到约 3.19 µs
 - 无 DMA、无硬件流控、无 9 位数据

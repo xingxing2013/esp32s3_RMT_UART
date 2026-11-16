@@ -40,6 +40,7 @@ typedef struct {
     rmt_uart_parity_t    parity;      /* 默认 NONE */
     rmt_uart_stop_bits_t stop_bits;   /* 默认 1 */
     bool     invert;
+    bool     use_dma;                 /* 仅 RMT 最后一个通道支持 DMA，最多一路可用 */
     size_t   rx_buffer_bytes;         /* 0 = 默认 2048 */
     size_t   tx_buffer_bytes;         /* 0 = 默认 1024 */
 } rmt_uart_config_t;

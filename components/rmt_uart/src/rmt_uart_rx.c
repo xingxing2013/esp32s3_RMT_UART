@@ -93,7 +93,8 @@ static void ru_rx_task(void *arg)
                 },
             };
             esp_err_t err = rmt_receive(u->rx_ch, u->rx_buf,
-                                        (size_t)RU_RX_USER_SYMBOLS * sizeof(rmt_symbol_word_t),
+                                        (u->cfg.use_dma ? RU_MEM_BLOCK_SYMS_DMA : RU_RX_USER_SYMBOLS) *
+                                            sizeof(rmt_symbol_word_t),
                                         &rcfg);
             if (err == ESP_OK) {
                 u->stats.rx_restarts++;
@@ -135,17 +136,18 @@ esp_err_t ru_rx_create(struct rmt_uart_s *u)
         .gpio_num = (gpio_num_t)u->cfg.rx_gpio,
         .clk_src = RMT_CLK_SRC_DEFAULT,
         .resolution_hz = u->resolution_hz,
-        .mem_block_symbols = RU_MEM_BLOCK_SYMS,
+        .mem_block_symbols = u->cfg.use_dma ? RU_MEM_BLOCK_SYMS_DMA : RU_MEM_BLOCK_SYMS,
         .intr_priority = 3,
         .flags = {
             .invert_in = u->cfg.invert,
-            .with_dma = 0,
+            .with_dma = u->cfg.use_dma,
             .io_loop_back = 0,
         },
     };
     ESP_RETURN_ON_ERROR(rmt_new_rx_channel(&cfg, &u->rx_ch), TAG, "new rx channel");
 
-    u->rx_buf = heap_caps_malloc((size_t)RU_RX_USER_SYMBOLS * sizeof(rmt_symbol_word_t),
+    size_t rx_symbols = u->cfg.use_dma ? RU_MEM_BLOCK_SYMS_DMA : RU_RX_USER_SYMBOLS;
+    u->rx_buf = heap_caps_malloc(rx_symbols * sizeof(rmt_symbol_word_t),
                                  MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     u->ring = ru_ring_create(RU_RING_SYMBOLS);
     u->dec = ru_decoder_create(&u->timing, ru_decoder_sink, u);
@@ -174,7 +176,7 @@ esp_err_t ru_rx_create(struct rmt_uart_s *u)
         },
     };
     ESP_RETURN_ON_ERROR(rmt_receive(u->rx_ch, u->rx_buf,
-                                    (size_t)RU_RX_USER_SYMBOLS * sizeof(rmt_symbol_word_t),
+                                    rx_symbols * sizeof(rmt_symbol_word_t),
                                     &rcfg),
                         TAG, "arm rx");
     return ESP_OK;

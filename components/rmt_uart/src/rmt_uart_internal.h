@@ -19,6 +19,7 @@
 #define RU_RX_USER_SYMBOLS  96
 #define RU_RING_SYMBOLS     1024
 #define RU_MEM_BLOCK_SYMS   48
+#define RU_MEM_BLOCK_SYMS_DMA 512
 #define RU_RX_STACK         4096
 #define RU_TX_STACK         3584
 #define RU_RX_PRIO          12

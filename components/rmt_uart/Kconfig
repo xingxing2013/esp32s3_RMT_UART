@@ -60,6 +60,11 @@ config SU_DIAG_IRQ_KHZ
     default 0
     depends on SU_DIAG_ENABLE
 
+config SU_DIAG_DMA
+    bool "Use RMT DMA for port 0 in load test (only ch3 supports DMA)"
+    default n
+    depends on SU_DIAG_ENABLE
+
 config SU_DIAG_HOG_PERCENT
     int "Extra CPU hog duty cycle (%, 0 = off)"
     default 0
