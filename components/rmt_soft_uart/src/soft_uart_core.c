@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "soft_uart_internal.h"
+#include "soft_uart_rx.h"
 #include "soft_uart_tx.h"
 
 static const char *TAG = "su_core";
@@ -15,6 +16,14 @@ static const char *TAG = "su_core";
 static void su_stop_workers(struct rmt_soft_uart_s *u)
 {
     u->closing = true;
+
+    if (u->rx_task) {
+        xTaskNotifyGive(u->rx_task);
+        if (xSemaphoreTake(u->rx_exited, pdMS_TO_TICKS(2000)) != pdTRUE) {
+            ESP_LOGW(TAG, "rx task did not exit in time");
+        }
+        u->rx_task = NULL;
+    }
 
     if (u->tx_task) {
         uint8_t dummy = 0;
@@ -28,6 +37,7 @@ static void su_stop_workers(struct rmt_soft_uart_s *u)
 
 static void su_teardown(struct rmt_soft_uart_s *u)
 {
+    su_rx_destroy(u);
     su_tx_destroy(u);
 }
 
@@ -53,7 +63,11 @@ static esp_err_t su_setup(struct rmt_soft_uart_s *u)
         u->rx_max_ns = 8000000u;
     }
 
-    return su_tx_create(u);
+    esp_err_t err = su_tx_create(u);
+    if (err != ESP_OK) {
+        return err;
+    }
+    return su_rx_create(u);
 }
 
 esp_err_t rmt_soft_uart_new(const rmt_soft_uart_config_t *cfg,
@@ -155,11 +169,10 @@ int rmt_soft_uart_write(rmt_soft_uart_handle_t u, const void *data, size_t len,
 int rmt_soft_uart_read(rmt_soft_uart_handle_t u, void *buf, size_t len,
                        TickType_t timeout)
 {
-    (void)u;
-    (void)buf;
-    (void)len;
-    (void)timeout;
-    return -1; /* 任务 6 接入 RX */
+    if (!u || !buf || len == 0 || !u->rx_sb) {
+        return -1;
+    }
+    return (int)xStreamBufferReceive(u->rx_sb, buf, len, timeout);
 }
 
 esp_err_t rmt_soft_uart_flush_rx(rmt_soft_uart_handle_t u)
