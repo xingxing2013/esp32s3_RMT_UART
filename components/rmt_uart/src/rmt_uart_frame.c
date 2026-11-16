@@ -279,13 +279,32 @@ RU_INLINE void dec_frame_consume(ru_decoder_t *d, int level, uint32_t end)
 {
     while (d->in_frame) {
         /* 数据位：采样点间隔恒为 1 bit，用增量推进代替每次重算 */
-        while (d->next_sample < d->t.data_bits && ts_before(d->next_sample_ts, end)) {
-            if (level) {
-                d->data |= (uint8_t)(1u << d->next_sample);
-                d->ones++;
+        if (d->next_sample < d->t.data_bits && ts_before(d->next_sample_ts, end)) {
+            uint32_t span = end - d->next_sample_ts;
+            if (span >= 3u * d->t.bit_ticks) {
+                /* 长 run：一次写入多个数据位 */
+                uint32_t remaining = (uint32_t)(d->t.data_bits - d->next_sample);
+                uint32_t k = (span + d->t.bit_ticks - 1u) / d->t.bit_ticks;
+                if (k > remaining) {
+                    k = remaining;
+                }
+                if (level) {
+                    d->data |= (uint8_t)((((uint32_t)1u << k) - 1u) << d->next_sample);
+                    d->ones += k;
+                }
+                d->next_sample += (int)k;
+                d->next_sample_ts += k * d->t.bit_ticks;
+            } else {
+                while (d->next_sample < d->t.data_bits &&
+                       ts_before(d->next_sample_ts, end)) {
+                    if (level) {
+                        d->data |= (uint8_t)(1u << d->next_sample);
+                        d->ones++;
+                    }
+                    d->next_sample++;
+                    d->next_sample_ts += d->t.bit_ticks;
+                }
             }
-            d->next_sample++;
-            d->next_sample_ts += d->t.bit_ticks;
         }
         if (d->next_sample < d->t.data_bits) {
             return;
